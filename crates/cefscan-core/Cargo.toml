@@ -1,0 +1,39 @@
+[package]
+name = "cefscan-core"
+description = "Scan engine that finds CEF / Electron / NWJS / CefSharp applications"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[features]
+# `everything` 必须是默认开启的：它只控制 `scan/everything.rs` 是否编译，
+# 而那个模块的 IPC 编解码是最容易出错的部分。如果它是可选 feature，
+# `cargo test` 默认就不会编译它的测试，等于没有覆盖。
+# 它不引入任何额外依赖（windows-sys 本来就是 target 门控的），非 Windows 上是空操作。
+default = ["serde", "everything"]
+# Everything IPC 索引后端（仅 Windows）。不可用时自动回落到自写遍历。
+everything = []
+serde = ["dep:serde"]
+
+[dependencies]
+rayon = { workspace = true }
+memchr = { workspace = true }
+thiserror = { workspace = true }
+serde = { workspace = true, optional = true }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_System_Diagnostics_ToolHelp",
+    "Win32_System_Threading",
+    "Win32_Storage_FileSystem",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_System_LibraryLoader",
+    "Win32_System_DataExchange",
+    "Win32_Graphics_Gdi",
+] }
+
+[dev-dependencies]
+tempfile = "3"
