@@ -1,0 +1,3 @@
+# tauri-build 每次构建都会重新生成，不入库。
+# 克隆后跑一次 cargo build 就会出现（capabilities 的编辑器补全靠它）。
+/gen/schemas

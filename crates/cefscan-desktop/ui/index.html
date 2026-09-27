@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>cefscanw</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div id="app">
+      <header class="toolbar">
+        <div class="brand">cefscanw</div>
+        <input
+          id="root-input"
+          type="text"
+          placeholder="限定目录（留空扫描全部盘符）"
+          spellcheck="false"
+        />
+        <select id="backend-select">
+          <option value="auto">后端：自动</option>
+          <option value="filesystem">后端：遍历</option>
+          <option value="index">后端：索引</option>
+        </select>
+        <button id="scan-button" type="button">开始扫描</button>
+        <span id="status" class="status">就绪</span>
+      </header>
+
+      <section class="summary" id="summary" hidden>
+        <div><span class="label">应用</span><span id="sum-apps">0</span></div>
+        <div><span class="label">总占用</span><span id="sum-total">0 B</span></div>
+        <div><span class="label">列表合计</span><span id="sum-sum">0 B</span></div>
+        <div><span class="label">后端</span><span id="sum-backend">-</span></div>
+        <div><span class="label">耗时</span><span id="sum-elapsed">0 ms</span></div>
+      </section>
+
+      <main class="table-wrap">
+        <table id="results">
+          <thead>
+            <tr>
+              <th data-sort="kind">类型</th>
+              <th data-sort="size">占用</th>
+              <th data-sort="running">运行</th>
+              <th data-sort="path">路径</th>
+            </tr>
+          </thead>
+          <tbody id="results-body"></tbody>
+        </table>
+        <p id="empty" class="empty">点上面的按钮开始扫描。</p>
+      </main>
+    </div>
+
+    <script src="main.js"></script>
+  </body>
+</html>

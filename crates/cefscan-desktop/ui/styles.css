@@ -1,0 +1,111 @@
+:root {
+  --bg: #1b1d23;
+  --panel: #22252c;
+  --border: #34383f;
+  --text: #d7dae0;
+  --muted: #9aa0aa;
+  --accent: #4f8ff7;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font: 14px/1.5 "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+}
+
+#app { display: flex; flex-direction: column; height: 100%; }
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+}
+
+.brand { font-weight: 600; letter-spacing: 0.5px; }
+
+#root-input {
+  flex: 1;
+  min-width: 120px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: #1a1c21;
+  color: var(--text);
+}
+
+#root-input:focus, #backend-select:focus { outline: 1px solid var(--accent); }
+
+#backend-select, #scan-button {
+  padding: 6px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: #2a2e36;
+  color: var(--text);
+}
+
+#scan-button { background: var(--accent); border-color: var(--accent); color: #fff; cursor: pointer; }
+#scan-button:disabled { opacity: 0.6; cursor: default; }
+
+.status { color: var(--muted); min-width: 160px; }
+
+.summary {
+  display: flex;
+  gap: 24px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border);
+  background: #1f222a;
+}
+
+.summary .label { color: var(--muted); margin-right: 8px; }
+
+.table-wrap { flex: 1; overflow: auto; }
+
+table { width: 100%; border-collapse: collapse; }
+
+th {
+  position: sticky;
+  top: 0;
+  text-align: left;
+  padding: 8px 12px;
+  background: #262a32;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+  user-select: none;
+}
+
+th:hover { color: #fff; }
+
+td { padding: 6px 12px; border-bottom: 1px solid #262a32; vertical-align: middle; }
+
+tbody tr:hover { background: #23262e; cursor: pointer; }
+
+.num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+
+.path { max-width: 620px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.tag {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 10px;
+  color: #10131a;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-right: 5px;
+  border-radius: 50%;
+  background: #4ec97a;
+}
+
+.empty, .more { color: var(--muted); padding: 16px; text-align: center; }

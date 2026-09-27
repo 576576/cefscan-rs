@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "cefscanw 只需要与后端通信的 IPC 能力",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}
