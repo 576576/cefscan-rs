@@ -157,9 +157,13 @@ fn is_version_like(name: &str) -> bool {
 mod tests {
     use super::*;
 
-    /// 全部取自本机真实扫描结果，改启发式时先看这张表。
+    /// Windows 侧的真实样本，全部取自本机扫描结果。改启发式时先看这张表。
+    ///
+    /// **只在 Windows 上跑**：这些字面量用 `\` 分隔，而 Unix 上 `\` 是合法的文件名字符、
+    /// 不是分隔符，整条串会被 `Path` 当成一个文件名，断言必然错。
+    #[cfg(target_os = "windows")]
     #[test]
-    fn real_world_paths_get_readable_names() {
+    fn windows_paths_get_readable_names() {
         let cases = [
             (
                 r"C:\Users\16695\AppData\Local\Programs\WorkBuddy\WorkBuddy.exe",
@@ -212,28 +216,68 @@ mod tests {
         }
     }
 
+    /// Unix 侧样本，用 `/` 分隔。挑的都是"扫一眼就知道该显示什么"的常见布局。
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn unix_paths_get_readable_names() {
+        let cases = [
+            ("/opt/google/chrome/chrome", "chrome"),
+            ("/usr/lib/electron/electron", "electron"),
+            ("/usr/share/code/code", "code"),
+            // 版本号目录要跳过（`app-8.0.0` 会被 is_version_like 认出来）。
+            ("/opt/Postman/app-8.0.0/Postman", "Postman"),
+            // Steam 的 steamapps 是边界，但上面一层才是应用名。
+            (
+                "/home/me/.local/share/Steam/steamapps/common/Hearts of Iron IV/dowser",
+                "Hearts of Iron IV",
+            ),
+        ];
+
+        for (path, expected) in cases {
+            assert_eq!(display_name(Path::new(path)), expected, "路径 {path}");
+        }
+    }
+
     #[test]
     fn stops_at_user_and_system_directories() {
         // 直接躺在 Programs 下面的 exe 没有更有意义的目录名可用，
         // 应该退回文件名而不是显示 "Local" 或 "Programs"。
-        assert_eq!(
-            display_name(Path::new(r"C:\Users\me\AppData\Local\Programs\tool.exe")),
-            "tool"
-        );
-        assert_eq!(display_name(Path::new(r"C:\Program Files\app.exe")), "app");
+        #[cfg(target_os = "windows")]
+        {
+            assert_eq!(
+                display_name(Path::new(r"C:\Users\me\AppData\Local\Programs\tool.exe")),
+                "tool"
+            );
+            assert_eq!(display_name(Path::new(r"C:\Program Files\app.exe")), "app");
+        }
+
+        // Unix 侧的对应场景：往上撞到 Downloads / local 这类边界就停，退回文件名。
+        #[cfg(not(target_os = "windows"))]
+        {
+            assert_eq!(display_name(Path::new("/home/me/Downloads/tool")), "tool");
+            assert_eq!(display_name(Path::new("/usr/local/tool")), "tool");
+        }
     }
 
     #[test]
     fn falls_back_to_file_stem() {
-        assert_eq!(display_name(Path::new(r"C:\solo.exe")), "solo");
+        // 相对路径没有可用的父目录，任何平台都该退回文件名。
         assert_eq!(display_name(Path::new("libcef.dll")), "libcef");
+
+        #[cfg(target_os = "windows")]
+        assert_eq!(display_name(Path::new(r"C:\solo.exe")), "solo");
+        #[cfg(not(target_os = "windows"))]
+        assert_eq!(display_name(Path::new("/solo")), "solo");
     }
 
     #[test]
     fn never_returns_empty() {
-        for path in [r"C:\", "/", "", "x"] {
+        for path in ["/", "", "x"] {
             assert!(!display_name(Path::new(path)).is_empty(), "路径 {path:?}");
         }
+        // 盘符根没有 file_name，是最容易漏的一条。
+        #[cfg(target_os = "windows")]
+        assert!(!display_name(Path::new(r"C:\")).is_empty());
     }
 
     #[test]

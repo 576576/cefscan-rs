@@ -106,11 +106,22 @@ mod tests {
 
     #[test]
     fn framework_names_are_recognised() {
+        // 表格里存的是小写形式。`.framework` 是 macOS 的目录名，真实拼写带大写和空格，
+        // 能命中是因为 Windows/macOS 的文件系统大小写不敏感、判定前会先小写化。
+        // Linux 上刻意不小写化，只有全小写的拼写才命中——这个拼写在 Linux 上也不会出现。
         assert_eq!(
-            class("Chromium Embedded Framework"),
+            class("chromium embedded framework"),
             Some(CandidateKind::Cef)
         );
-        assert_eq!(class("Electron Framework"), Some(CandidateKind::Cef));
+
+        #[cfg(not(target_os = "linux"))]
+        {
+            assert_eq!(
+                class("Chromium Embedded Framework"),
+                Some(CandidateKind::Cef)
+            );
+            assert_eq!(class("Electron Framework"), Some(CandidateKind::Cef));
+        }
     }
 
     #[cfg(not(target_os = "linux"))]
@@ -118,5 +129,13 @@ mod tests {
     fn framework_names_are_case_insensitive() {
         assert_eq!(class("LIBCEF.DLL"), Some(CandidateKind::Cef));
         assert_eq!(class("ELECTRON FRAMEWORK"), Some(CandidateKind::Cef));
+    }
+
+    /// Linux 上大小写敏感：带大写的拼写不该命中，全小写的才命中。
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn names_are_case_sensitive_on_linux() {
+        assert_eq!(class("LIBCEF.DLL"), None);
+        assert_eq!(class("libcef.dll"), Some(CandidateKind::Cef));
     }
 }

@@ -380,12 +380,24 @@ mod tests {
     }
 
     #[test]
-    fn empty_roots_report_an_error() {
+    fn empty_roots_fall_back_to_platform_defaults() {
+        // 不指定 root 时走平台默认起点：Windows 是各个盘符，Unix 是 `/`。
+        //
+        // 这里只验证**推导出来的起点**，不能真的去 `walk`——那会遍历真实全盘，
+        // 在 Linux CI 上实测要 115 秒，而且违反「测试不得访问真实全盘」的约定。
+        let roots = resolve_roots(&ScanOptions::default()).unwrap();
+        assert!(!roots.is_empty());
+        assert!(roots.iter().all(|root| root.is_absolute()), "{roots:?}");
+    }
+
+    #[test]
+    fn explicit_roots_are_used_as_given() {
+        // 显式 root 原样采用；Windows 上只多做一次分隔符归一化（`/` -> `\`）。
+        let given = if cfg!(windows) { r"C:\apps" } else { "/apps" };
         let options = ScanOptions {
-            roots: vec![],
+            roots: vec![PathBuf::from(given)],
             ..ScanOptions::default()
         };
-        // 不指定 root 时会走平台默认（Windows 有盘符），所以这里只验证不 panic
-        let _ = walk(&options);
+        assert_eq!(resolve_roots(&options).unwrap(), vec![PathBuf::from(given)]);
     }
 }
