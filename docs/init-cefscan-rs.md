@@ -358,12 +358,69 @@ cefscan benchmark [--rounds N]    # 自测耗时与峰值内存
     代价是发射顺序不确定，所以 `scan_streaming` **不排序**，排序由 `scan()` /
     前端各自负责（`sort_apps` 是共用实现）。
   - 事件类型：`ScanEvent::{Started, Item(AppRow), Done{...}, Error{message}}`，serde 用 `tag = "type"` 打标签。
-- **能力**：按大小排序、类型筛选、运行中高亮、点击"在资源管理器中显示"（`explorer /select,"path"`，注意路径带空格必须加引号，参考实现有对应单测 `src/search.rs:875-883`）。
+- **能力**：图标列 + 名称列 + 类型 + 占用 + 运行 + 路径（可排序）、类型筛选、运行中高亮、
+  点击行展开完整路径并在资源管理器中定位（`explorer /select,"path"`，注意路径带空格必须加引号，
+  参考实现有对应单测 `src/search.rs:875-883`）。
 - **边界**：GUI 不复制任何检测逻辑，只做 `cefscan-core` 的消费者；core 不依赖 Tauri。
 - **构建**：`bundle.active = false`，只要裸 exe 不要安装包；`main.rs` 上
   `#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]` 去掉控制台。
   `tauri-build` 生成 Windows 资源文件需要 `icons/icon.ico`，由 `tools/make_icon.py`
   生成并入库。运行期依赖系统自带 WebView2（Win10/11 默认已装）。
+
+### 8.1 后端显示名、名称列与图标列（落地补充）
+
+**后端显示名**。`ScanStats.backend` 是 `&'static str`，值只有两种：
+
+| 后端 | 显示名 | 来源 |
+| --- | --- | --- |
+| 文件系统遍历 | `cefscan` | `scan::FILESYSTEM_BACKEND` 常量 |
+| 索引 | **实际服务名**（如 `Everything`） | `scan/everything::SERVICE_NAME` 常量 |
+
+索引后端返回服务名而不是笼统的 `index`，是为了以后接 plocate / Spotlight 时
+显示名能自动跟着变，前端和 CLI 都不用改。GUI 汇总区、CLI 的 stderr 摘要都直接
+读 `stats.backend`，所以改后端名只需要动 core 里那两个常量。
+
+**名称列**：`cefscan_core::display_name(path)`（`crates/cefscan-core/src/naming.rs`）。
+扫描结果里的 path 是"最能代表这个应用的那个文件或目录"，直接当名字没法看
+（`...\Microsoft VS Code\Code.exe` → "Code"，`...\Edge\Application\154.0.4258.37\msedge.exe` → "msedge"）。
+启发式是**纯字符串**的（不碰文件系统，因此好测）：从所在目录往上走最多 6 层，
+跳过版本号目录（`154.0.4258.37`、`app-3.6.6`、`office6`）和通用目录名
+（`Application`/`Bin64`/`runtime`/`resources`…），取第一个有意义的段；撞到
+用户/系统目录（`Programs`、`LocalAppData`、`steamapps`…）就停，退回文件名。
+`is_version_like` 的判据是"剥掉前导字母和分隔符后剩下纯数字+点/横线/下划线"——
+这样 `BeamNG.drive`（剥完是空）和 `360se6`（含字母）不会被误判成版本号。
+测试里有一张 11 条真实路径的期望值表，改启发式先看那张表。
+
+**图标列**：`crates/cefscan-desktop/src-tauri/src/icon.rs`，链路是
+`SHGetFileInfoW(SHGFI_ICON|SHGFI_LARGEICON)` → `HICON` → `GetIconInfo` 拆出彩色位图与掩码
+→ `GetDIBits` 取 32bpp 自顶向下 BGRA → 补 alpha → PNG → `data:image/png;base64,…`。
+
+两个实现选择：
+
+- **用 `GetDIBits` 而不是 `DrawIconEx` 画进 DIB**：前者拿到的是位图原始像素，行为确定；
+  后者是否保留 32bpp 图标的 alpha 通道取决于具体 GDI 实现。代价是老式图标要自己补
+  alpha —— 判据是"彩色位图 alpha 全为 0"，这时改用掩码位图（白=透明、黑=不透明）。
+  纯单色图标（`hbmColor` 为空）直接放弃，返回 `None`，前端留空格。
+- **结果按路径缓存**（`OnceLock<Mutex<HashMap>>`）：同一个 exe 在列表里可能重复出现，
+  而且每次 `SHGetFileInfoW` 都要碰一次 shell。失败也缓存，免得反复问。
+  `SHGetFileInfoW` 要求线程先 `CoInitializeEx`，用 thread-local 挡一下重复初始化。
+
+`icon.rs` 自带三条单测（拿测试进程自己的 exe 当样本）：PNG 签名与正方形尺寸、
+**解出来必须有非透明像素**（防 alpha 补错导致整列空白格）、不存在的路径返回 `None`。
+
+**路径列折叠**：按**分隔符切段**折叠，不是按字符数切——前面只留「根 + 3 层目录」
+（`PATH_HEAD_SEGMENTS`），中间省略号，后面只留文件名，这样尾部一定是完整的文件名：
+
+```
+C:\Users\16695\AppData\Local\Programs\WorkBuddy\WorkBuddy.exe
+  → C:\Users\16695\AppData\…\WorkBuddy.exe
+```
+
+盘符（`C:`）和 UNC 的空段都算"根"，不占目录层数，所以 `\\server\share\dir\sub\file.exe`
+折成 `\\server\share\…\file.exe`。折完不比原文短就返回原文。点整行展开完整路径。
+
+表格用 `table-layout: fixed` + `<colgroup>` 固定各列宽度、路径列吃剩余空间，
+这样折叠后的文本不会再被 CSS 的 `text-overflow` 二次截断（否则尾部会被吃掉）。
 
 ---
 
