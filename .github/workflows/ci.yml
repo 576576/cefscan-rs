@@ -110,7 +110,9 @@ jobs:
             librsvg2-dev
 
       - name: 测试
-        run: cargo test --workspace --locked
+        # --no-fail-fast：cargo 默认遇到第一个失败的测试目标就停，
+        # 那样一次只能看到一部分失败（第一次跑 Linux 时 doctest 和 cefscanw 都没跑到）。
+        run: cargo test --workspace --locked --no-fail-fast
 
   build:
     name: build (${{ matrix.name }})
