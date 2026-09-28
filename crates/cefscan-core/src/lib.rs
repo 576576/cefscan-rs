@@ -24,6 +24,7 @@ pub mod filter;
 pub mod group;
 pub mod inspect;
 pub mod model;
+pub mod naming;
 pub mod process;
 mod scan;
 pub mod signature;
@@ -32,4 +33,5 @@ pub mod walk;
 
 pub use error::{ScanError, ScanResult};
 pub use model::{AppInfo, AppKind, Backend, Candidate, CandidateKind, ScanOptions, ScanStats};
+pub use naming::display_name;
 pub use scan::{ScanOutcome, scan, scan_streaming, sort_apps};
