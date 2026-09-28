@@ -6,6 +6,9 @@
 //! 为什么不用 `DrawIconEx` 画进 DIB：那条路是否保留 32bpp 图标的 alpha 通道
 //! 取决于具体 GDI 实现，而 `GetDIBits` 拿到的是位图原始像素，行为确定。代价是
 //! 老式"只有 AND 掩码、没有 alpha 通道"的图标要自己按掩码补透明度。
+//!
+//! 取图标这一段是**全局串行**的：`SHGetFileInfoW` 并发调用会偶发失败，
+//! 细节见 `imp::capture`。
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -40,6 +43,7 @@ mod imp {
     use std::os::windows::ffi::OsStrExt;
     use std::path::Path;
     use std::ptr::null_mut;
+    use std::sync::Mutex;
 
     use windows_sys::Win32::Graphics::Gdi::{
         BI_RGB, BITMAP, BITMAPINFO, BITMAPINFOHEADER, DIB_RGB_COLORS, DeleteObject, GetDC,
@@ -71,13 +75,29 @@ mod imp {
     }
 
     pub(super) fn extract(path: &Path) -> Option<String> {
+        // 取像素要串行，编码不用，所以锁在 capture 里而不是这里。
+        let (rgba, side) = capture(path)?;
+        encode_png(&rgba, side)
+    }
+
+    /// 取图标的 RGBA 像素。**必须串行调用。**
+    ///
+    /// `SHGetFileInfoW` 对并发调用不安全：4 个线程同时问同一个 exe，240 次里
+    /// 有 3 次直接返回 0（拿不到 HICON）。失败点在 shell 调用本身——同一轮实测
+    /// 里 `GetIconInfo` / `GetDIBits` 都是 0 次失败，所以不是我们销毁句柄的问题。
+    /// 加这把锁之后同样的并发跑到 0 失败。
+    ///
+    /// 代价可以忽略：结果本来就按路径缓存，一次扫描最多几十个不同的 exe。
+    fn capture(path: &Path) -> Option<(Vec<u8>, u32)> {
+        // 锁中毒说明上一次调用 panic 了；图标是可有可无的装饰，接着用就行。
+        static LOCK: Mutex<()> = Mutex::new(());
+        let _guard = LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+
         let hicon = icon_handle(path)?;
         let pixels = render(hicon);
         // SAFETY: hicon 由 SHGetFileInfoW 产出，这里负责唯一一次销毁。
         unsafe { DestroyIcon(hicon) };
-
-        let (rgba, side) = pixels?;
-        encode_png(&rgba, side)
+        pixels
     }
 
     /// 问 shell 要图标句柄。调用方负责 `DestroyIcon`。
@@ -318,5 +338,26 @@ mod tests {
     fn a_path_that_does_not_exist_yields_none() {
         let missing = PathBuf::from(r"C:\cefscan-does-not-exist\ghost.exe");
         assert_eq!(data_url(&missing), None);
+    }
+
+    /// 回归测试：`SHGetFileInfoW` 不能并发调用。
+    ///
+    /// 不加锁时实测 4 线程 240 次里有 3 次拿不到 HICON（`extract` 返回 None），
+    /// 表现为界面上偶发少一个图标、测试偶发红。锁加在 `imp::capture` 里。
+    /// 这里直接打 `extract` 而不是 `data_url`，否则会被结果缓存挡住、
+    /// 根本走不到 shell 调用。
+    #[test]
+    fn concurrent_extraction_never_fails() {
+        let exe = sample_exe();
+        let failures = std::thread::scope(|scope| {
+            let handles: Vec<_> = (0..4)
+                .map(|_| scope.spawn(|| (0..20).filter(|_| imp::extract(&exe).is_none()).count()))
+                .collect();
+            handles
+                .into_iter()
+                .map(|handle| handle.join().unwrap())
+                .sum::<usize>()
+        });
+        assert_eq!(failures, 0, "并发取同一个 exe 的图标不该失败");
     }
 }
