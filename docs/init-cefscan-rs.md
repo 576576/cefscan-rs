@@ -395,7 +395,7 @@ cefscan benchmark [--rounds N]    # 自测耗时与峰值内存
 `SHGetFileInfoW(SHGFI_ICON|SHGFI_LARGEICON)` → `HICON` → `GetIconInfo` 拆出彩色位图与掩码
 → `GetDIBits` 取 32bpp 自顶向下 BGRA → 补 alpha → PNG → `data:image/png;base64,…`。
 
-两个实现选择：
+三个实现选择：
 
 - **用 `GetDIBits` 而不是 `DrawIconEx` 画进 DIB**：前者拿到的是位图原始像素，行为确定；
   后者是否保留 32bpp 图标的 alpha 通道取决于具体 GDI 实现。代价是老式图标要自己补
@@ -404,9 +404,18 @@ cefscan benchmark [--rounds N]    # 自测耗时与峰值内存
 - **结果按路径缓存**（`OnceLock<Mutex<HashMap>>`）：同一个 exe 在列表里可能重复出现，
   而且每次 `SHGetFileInfoW` 都要碰一次 shell。失败也缓存，免得反复问。
   `SHGetFileInfoW` 要求线程先 `CoInitializeEx`，用 thread-local 挡一下重复初始化。
+- **取图标这一段全局串行**（`imp::capture` 里一把 `Mutex<()>`）：`SHGetFileInfoW`
+  **不能并发调用**。4 线程同时对同一个 exe 调用，240 次里有 3 次直接返回 0（拿不到
+  `HICON`）。失败点在 shell 调用本身——同一轮实测里 `GetIconInfo` / `GetDIBits`
+  都是 0 次失败，所以不是我们销毁句柄的问题。**这个并发在真实使用中一定会发生**：
+  GUI 的图标提取跑在 rayon 工作线程上（`sizes_parallel_each` 的并行回调里），
+  不加锁的表现是界面上偶发少一个图标。加锁后同样并发跑 0 失败；PNG 编码在锁外做。
+  代价可以忽略：结果本来就按路径缓存，一次扫描最多几十个不同的 exe。
 
-`icon.rs` 自带三条单测（拿测试进程自己的 exe 当样本）：PNG 签名与正方形尺寸、
-**解出来必须有非透明像素**（防 alpha 补错导致整列空白格）、不存在的路径返回 `None`。
+`icon.rs` 自带四条单测（拿测试进程自己的 exe 当样本）：PNG 签名与正方形尺寸、
+**解出来必须有非透明像素**（防 alpha 补错导致整列空白格）、不存在的路径返回 `None`、
+**4 线程并发提取同一个 exe 不许失败**（就是上面那个并发 bug 的回归测试；它直接打
+`imp::extract` 而不是 `data_url`，否则会被结果缓存挡住、走不到 shell 调用）。
 
 **路径列折叠**：按**分隔符切段**折叠，不是按字符数切——前面只留「根 + 3 层目录」
 （`PATH_HEAD_SEGMENTS`），中间省略号，后面只留文件名，这样尾部一定是完整的文件名：
