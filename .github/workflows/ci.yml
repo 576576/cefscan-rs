@@ -1,0 +1,167 @@
+# cefscan 的持续集成：格式/静态检查、测试，以及在 Windows 与 Linux 上产出可下载的
+# release 产物。
+#
+# 三个 job 的分工：
+#   lint  —— rustfmt + clippy -D warnings，只跑一份（Linux），够用且省 runner。
+#   test  —— Windows 与 Linux 各跑一遍全量测试。Windows 上会额外覆盖 cefscanw 的
+#            图标提取测试（那些测试是 cfg(windows) 的）。
+#   build —— 两个平台各出一份 release 产物（cefscan + cefscanw + README + LICENSE），
+#            上传为 artifact。
+#
+# 关于 Linux 的系统依赖：cefscanw 是 Tauri 2 应用，Linux 上编译需要 webkit2gtk-4.1
+# 等开发包。即使只跑测试也会编译 cefscanw（它在 workspace 里），所以每个 Linux job
+# 都要装。我们没有用 tray-icon 特性，因此不需要 libappindicator3-dev。
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+# 同一分支连续推送时，取消上一次还没跑完的，省 runner。
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# 只需要读仓库 + 上传 artifact，不用写权限。
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  lint:
+    name: lint (fmt + clippy)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: 缓存 cargo 与 target
+        uses: Swatinem/rust-cache@v2
+
+      - name: 安装 Linux 系统依赖
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            librsvg2-dev
+
+      - name: rustfmt
+        run: cargo fmt --all --check
+
+      - name: clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+      # feature 组合矩阵：确认 serde / everything 都能单独关掉，
+      # 否则这两个 feature 会悄悄退化成"其实必须开"。
+      - name: feature 组合
+        run: |
+          set -euxo pipefail
+          cargo check -p cefscan-core --locked --no-default-features
+          cargo check -p cefscan-core --locked --no-default-features --features serde
+          cargo check -p cefscan-core --locked --no-default-features --features everything
+          cargo check -p cefscan-core --locked --no-default-features --features serde,everything
+
+  test:
+    name: test (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: windows-x86_64
+            os: windows-latest
+          - name: linux-x86_64
+            os: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: 缓存 cargo 与 target
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: test-${{ matrix.name }}
+
+      - name: 安装 Linux 系统依赖
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            librsvg2-dev
+
+      - name: 测试
+        run: cargo test --workspace --locked
+
+  build:
+    name: build (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    needs: [lint, test]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: windows-x86_64
+            os: windows-latest
+            exe: ".exe"
+          - name: linux-x86_64
+            os: ubuntu-latest
+            exe: ""
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: 缓存 cargo 与 target
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: build-${{ matrix.name }}
+
+      - name: 安装 Linux 系统依赖
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            librsvg2-dev
+
+      - name: 构建 release
+        run: cargo build --release --locked --workspace
+
+      # 收集成 dist/ 再上传：下载下来的 artifact 里就是一个干净的自包含目录。
+      - name: 收集产物
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          cp "target/release/cefscan${{ matrix.exe }}" dist/
+          cp "target/release/cefscanw${{ matrix.exe }}" dist/
+          cp README.md LICENSE dist/
+
+      # 产物能跑起来才算构建成功；cefscanw 是 GUI，不在 CI 里启动它。
+      - name: 冒烟检查
+        shell: bash
+        run: |
+          set -euo pipefail
+          "./dist/cefscan${{ matrix.exe }}" --version
+          "./dist/cefscan${{ matrix.exe }}" --help > /dev/null
+
+      - name: 上传产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: cefscan-${{ matrix.name }}
+          path: dist/
+          if-no-files-found: error
+          retention-days: 30
