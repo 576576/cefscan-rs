@@ -44,8 +44,13 @@ pub fn dir_size(path: &Path) -> u64 {
                 }
             }
 
-            total = total.saturating_add(metadata.len());
+            // 只累加**文件**大小。目录 inode 自身的 `st_size` 在 ext4 上是 4096、
+            // 在 NTFS 上是 0，把它算进去会让同一棵树在两个平台上得出不同的"占用"
+            // （实测：一个只放 350 字节文件的目录在 Linux 上会报 4446）。
             let is_dir = metadata.file_type().is_dir();
+            if !is_dir {
+                total = total.saturating_add(metadata.len());
+            }
             #[cfg(any(target_os = "linux", target_os = "macos"))]
             let is_symlink = metadata.file_type().is_symlink();
             #[cfg(target_os = "windows")]
@@ -110,10 +115,13 @@ mod tests {
     #[test]
     fn sizes_add_up_recursively() {
         let root = std::env::temp_dir().join(format!("cefscan-size-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(root.join("nested")).unwrap();
         fs::write(root.join("a.bin"), vec![0_u8; 100]).unwrap();
         fs::write(root.join("nested").join("b.bin"), vec![0_u8; 250]).unwrap();
 
+        // 100 + 250，目录 inode 自身的大小不算在内——ext4 上目录的 st_size 是 4096，
+        // 算进去这个断言就会变成 4446（两个平台结果不一致）。
         assert_eq!(dir_size(&root), 350);
         let parallel = sizes_parallel(std::slice::from_ref(&root), 4);
         assert_eq!(parallel, vec![350]);
