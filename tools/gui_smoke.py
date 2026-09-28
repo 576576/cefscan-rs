@@ -12,12 +12,17 @@
 
 后两个参数是截屏时刻（秒），可给多个。脚本不会关掉 cefscanw，自己收尾。
 
+设 `CEFSCAN_SMOKE_EXPAND=1` 可以额外验证「点整行展开路径」：截屏结束后点第一行
+数据行，再存一张 `*_expanded.png`。
+
 设计要点：**不写死控件坐标**，而是从像素里认控件，这样改布局也不用改脚本：
 
 * 找窗口：`EnumWindows` + 标题前缀。
 * 找「开始扫描」按钮：在窗口矩形内找强调色 `#4f8ff7` 的像素，按 x 聚类后取
   **最右**一簇。最左那簇是窗口自身边框的蓝色，必须排除。
-* 找输入框：在按钮同一行上找 `#1a1c21` 最长的一段连续像素。
+* 找输入框：在按钮同一行上、**按钮左侧**找 `#1a1c21` 最长的一段连续像素。
+  两个约束都必要：窗口底色 `#1b1d23` 与输入框底色只差 2，单靠容差分不开，
+  所以既要收紧容差（`FIELD_TOLERANCE`），又要把搜索范围截到按钮左边。
 * 输入文字：`SendInput` + `KEYEVENTF_UNICODE`，绕开键盘布局。
 * 截屏：GDI `BitBlt`，手写 PNG 编码 —— 本机没有 Pillow，`Add-Type` 也被安全策略拦了。
 
@@ -26,6 +31,7 @@
 
 import ctypes
 import ctypes.wintypes as wintypes
+import os
 import struct
 import sys
 import time
@@ -46,6 +52,23 @@ INPUT_KEYBOARD = 1
 ACCENT = (247, 143, 79)  # BGRA 顺序的 #4f8ff7
 FIELD = (33, 28, 26)  # BGRA 顺序的 #1a1c21
 TOLERANCE = 14
+# 窗口底色 #1b1d23 的 BGRA 是 (35, 29, 27)，跟 FIELD 只差 2，必须收紧才分得开。
+FIELD_TOLERANCE = 4
+
+# KIND_COLORS（见 ui/main.js）里各标签底色，BGRA 顺序，用来定位数据行。
+#
+# **刻意不含 unknown `#7f848e`**：它接近中性灰（BGRA 142,132,127），跟界面上
+# 抗锯齿文字的混色像素几乎分不开，收进来会让汇总区那一行也被当成数据行。
+TAG_COLORS = [
+    (228, 196, 125),  # electron   #7dc4e4
+    (230, 169, 90),  # edge       #5aa9e6
+    (117, 108, 224),  # chrome     #e06c75
+    (221, 120, 198),  # nwjs       #c678dd
+    (123, 192, 229),  # cefsharp   #e5c07b
+    (121, 195, 152),  # mini_electron #98c379
+    (194, 182, 86),  # mini_blink #56b6c2
+    (102, 154, 209),  # cef        #d19a66
+]
 
 
 # ---------------------------------------------------------------- 窗口
@@ -207,25 +230,46 @@ def find_button(pixels, width, region):
     )
 
 
-def find_field(pixels, width, y, region):
-    """在给定行、窗口区域内找输入框内部最长的一段连续像素，返回 (中心x, 宽度)。"""
-    left, _top, right, _bottom = region
-    best = (0, -1, -1)
-    run_start = -1
-    for x in range(left, right):
+def find_field(pixels, width, y, region, right_limit):
+    """在给定行、`right_limit` 左侧找输入框，返回 (点击x, 宽度)。
+
+    用匹配像素的**最小/最大 x** 定边界，而不是找最长连续段：输入框里已经有文字
+    （上一轮输进去的路径）时，连续段会被文字切碎，只剩几十像素的碎片。
+    返回的 x 落在框内左侧内边距上，点哪儿都是把光标放进框里。
+    """
+    left, _top, _right, _bottom = region
+    hits = []
+    for x in range(left, right_limit):
         index = (y * width + x) * 4
-        if close_to(pixels[index : index + 3], FIELD):
-            if run_start < 0:
-                run_start = x
-        else:
-            if run_start >= 0 and x - run_start > best[0]:
-                best = (x - run_start, run_start, x - 1)
-            run_start = -1
-    if run_start >= 0 and right - run_start > best[0]:
-        best = (right - run_start, run_start, right - 1)
-    if best[1] < 0:
+        if close_to(pixels[index : index + 3], FIELD, FIELD_TOLERANCE):
+            hits.append(x)
+    if not hits:
         return None
-    return (best[1] + best[2]) // 2, best[0]
+    start, end = min(hits), max(hits)
+    return start + 10, end - start
+
+
+def find_first_row(pixels, width, region, min_hits=40):
+    """找第一条数据行。用「类型」列的标签底色定位——它在表格里独一无二。
+
+    要求一行里至少有 `min_hits` 个匹配像素，这样才不会被应用图标里偶合的
+    颜色骗到（图标只有 18px，一个标签的底色有几十像素宽）。
+    从工具条下方（+90px）开始扫，避开工具条和汇总区的文字。
+    返回标签中心 (x, y)；找不到返回 None。
+    """
+    left, top, right, bottom = region
+    for y in range(top + 90, bottom):
+        row = y * width * 4
+        hits = []
+        for x in range(left, right):
+            index = row + x * 4
+            for tag in TAG_COLORS:
+                if close_to(pixels[index : index + 3], tag):
+                    hits.append(x)
+                    break
+        if len(hits) >= min_hits:
+            return (min(hits) + max(hits)) // 2, y
+    return None
 
 
 # ---------------------------------------------------------------- 输入注入
@@ -288,6 +332,27 @@ def type_text(text):
         time.sleep(0.02)
 
 
+VK_CONTROL = 0x11
+VK_A = 0x41
+
+
+def press_combo(modifier, key):
+    """发一次组合键（先按 modifier 再按 key，然后逆序松开）。"""
+    steps = ((modifier, 0), (key, 0), (key, KEYEVENTF_KEYUP), (modifier, KEYEVENTF_KEYUP))
+    for vk, flags in steps:
+        item = Input()
+        item.type = INPUT_KEYBOARD
+        item.union.ki = KeybdInput(vk, 0, flags, 0, None)
+        user32.SendInput(1, ctypes.byref(item), ctypes.sizeof(Input))
+        time.sleep(0.03)
+
+
+def select_all():
+    """Ctrl+A。脚本可能被反复运行，输入框里还留着上一轮的路径，必须先清掉，
+    否则新路径会被追加到旧路径后面。"""
+    press_combo(VK_CONTROL, VK_A)
+
+
 # ---------------------------------------------------------------- 主流程
 
 
@@ -320,7 +385,7 @@ def main():
     button_x, button_y, box = button
     print(f"开始扫描按钮: 中心=({button_x},{button_y}) 外接矩形={box}")
 
-    field = find_field(pixels, width, button_y, region)
+    field = find_field(pixels, width, button_y, region, box[0] - 8)
     if field is None:
         print("找不到输入框")
         return 1
@@ -328,6 +393,8 @@ def main():
     print(f"输入框: 中心x={field_x} 宽度={run}px")
 
     click(field_x, button_y)
+    time.sleep(0.2)
+    select_all()
     type_text(root)
     print(f"已输入目录: {root}")
     time.sleep(0.4)
@@ -343,6 +410,20 @@ def main():
         target = output.replace(".png", f"_t{wait}s.png")
         save_png(target, width, pixels, (0, 0, width, height))
         print(f"t={wait}s 已截屏 -> {target}")
+
+    if os.environ.get("CEFSCAN_SMOKE_EXPAND"):
+        width, _height, pixels = capture()
+        row = find_first_row(pixels, width, region)
+        if row is None:
+            print("找不到数据行，跳过展开验证")
+            return 1
+        print(f"点第一行数据行: {row}")
+        click(*row)
+        time.sleep(0.8)
+        width, height, pixels = capture()
+        target = output.replace(".png", "_expanded.png")
+        save_png(target, width, pixels, (0, 0, width, height))
+        print(f"展开后已截屏 -> {target}")
 
     return 0
 
