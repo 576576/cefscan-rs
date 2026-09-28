@@ -2,7 +2,7 @@
 # release 产物。
 #
 # 三个 job 的分工：
-#   lint  —— rustfmt + clippy -D warnings，只跑一份（Linux），够用且省 runner。
+#   lint  —— 图标文件校验 + rustfmt + clippy -D warnings，只跑一份（Linux），够用且省 runner。
 #   test  —— Windows 与 Linux 各跑一遍全量测试。Windows 上会额外覆盖 cefscanw 的
 #            图标提取测试（那些测试是 cfg(windows) 的）。
 #   build —— 两个平台各出一份 release 产物（cefscan + cefscanw + README + LICENSE），
@@ -10,7 +10,9 @@
 #
 # 关于 Linux 的系统依赖：cefscanw 是 Tauri 2 应用，Linux 上编译需要 webkit2gtk-4.1
 # 等开发包。即使只跑测试也会编译 cefscanw（它在 workspace 里），所以每个 Linux job
-# 都要装。我们没有用 tray-icon 特性，因此不需要 libappindicator3-dev。
+# 都要装。我们没有用 tray-icon 特性，因此不需要 libappindicator3-dev —— 顺带一提，
+# tauri 在 Linux 上确实会把 tray-icon 拉进依赖图，但 libappindicator-sys 是用
+# libloading 在运行时 dlopen 的，构建期不需要对应的 dev 包。
 
 name: CI
 
@@ -39,6 +41,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      # 放在最前面：纯 Python，秒级出结果。bundle.icon 的约束只在 Unix 目标上生效
+      # （Windows 走 .ico 资源），本地和 Windows CI 都看不出来，只有 Linux 会在
+      # generate_context! 里 panic —— 那次要编译 5 分钟才炸。
+      - name: 校验图标文件
+        run: python3 tools/check_icons.py
 
       - name: 安装 Rust
         uses: dtolnay/rust-toolchain@stable
