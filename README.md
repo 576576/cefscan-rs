@@ -54,7 +54,9 @@ sudo apt-get install -y libwebkit2gtk-4.1-dev librsvg2-dev
 （Ubuntu 22.04 不行，它只有 webkit2gtk-4.0，Tauri 2 要 4.1。）
 
 GUI 运行时依赖系统自带的 WebView2（Windows 10/11 默认已装）。图标由
-`tools/make_icon.py`（纯标准库）生成，产物已入库，正常构建无需重跑。
+`tools/make_icon.py`（纯标准库）生成，产物已入库，正常构建无需重跑。它会出两个文件：
+`icons/icon.ico`（Windows 资源）和 `icons/icon.png`（Unix 目标的窗口图标，
+必须是 RGBA）。`tools/check_icons.py` 校验这两条，CI 的 lint 第一步就会跑。
 
 `.cargo/config.toml` 里开了 `+crt-static`，MSVC 运行库静态链接进二进制。
 所以两个 exe **只依赖 Windows 自带的核心 DLL**，不需要单独安装 VC++ 运行库，

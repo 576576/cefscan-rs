@@ -113,14 +113,15 @@ cefscan-rs/
 │       │   └── {index.html, main.js, styles.css}
 │       └── src-tauri/
 │           ├── src/{main.rs, lib.rs}
-│           ├── icons/icon.ico
+│           ├── icons/{icon.ico, icon.png}
 │           ├── capabilities/default.json
 │           └── tauri.conf.json
 ├── docs/
 │   ├── init-cefscan-rs.md     # 本文档
 │   └── schema.md              # 输出 schema 契约（冻结后不得随意变更）
 ├── tools/
-│   └── make_icon.py           # 生成 icons/icon.ico（纯标准库）
+│   ├── make_icon.py           # 生成 icons/ 下的 .ico 与 .png（纯标准库）
+│   └── check_icons.py         # 校验 tauri.conf.json 引用的图标齐全且为 RGBA
 ├── benchmarks/                # benchmark.ps1 / criterion benches
 └── completions/               # clap 生成的 bash/zsh/fish/powershell 补全
 ```
@@ -364,8 +365,26 @@ cefscan benchmark [--rounds N]    # 自测耗时与峰值内存
 - **边界**：GUI 不复制任何检测逻辑，只做 `cefscan-core` 的消费者；core 不依赖 Tauri。
 - **构建**：`bundle.active = false`，只要裸 exe 不要安装包；`main.rs` 上
   `#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]` 去掉控制台。
-  `tauri-build` 生成 Windows 资源文件需要 `icons/icon.ico`，由 `tools/make_icon.py`
-  生成并入库。运行期依赖系统自带 WebView2（Win10/11 默认已装）。
+  运行期依赖系统自带 WebView2（Win10/11 默认已装）。
+- **图标**：`tools/make_icon.py` 生成并入库两个文件，**缺一不可**：
+
+  | 文件 | 谁要 | 备注 |
+  | --- | --- | --- |
+  | `icons/icon.ico` | Windows：`tauri-build` 生成资源文件 | 6 个尺寸的 32bpp BMP 条目 |
+  | `icons/icon.png` | Unix：`tauri-codegen` 取默认窗口图标 | 256×256，**必须 RGBA** |
+
+  `tauri.conf.json` 的 `bundle.icon` 同时列了这两个；`tauri-build` 按 `.find(|i|
+  i.ends_with(".ico"))` 挑、`tauri-codegen` 按 `.png` 挑，互不干扰。
+
+  这里有个**只在 Linux 上才暴露的坑**：`tauri-codegen` 的 `find_icon` 在非 Windows
+  目标上从 `bundle.icon` 里挑第一个 `.png`，挑不到就退回硬编码的 `icons/icon.png`，
+  再找不到就在 `generate_context!` 里 panic（"failed to open icon ...: No such file
+  or directory"）。Windows 走的是另一条路（`default_window_icon_from_app_icon_resource`），
+  所以**本地和 Windows CI 都验证不到**，第一次推 CI 就是 5 分钟后才炸在 Linux job 上。
+  另外 `CachedIcon::new_png` 会检查 `png::ColorType::Rgba`，RGB 或调色板同样 panic。
+
+  `tools/check_icons.py` 把这两条约束抽出来做静态校验（复刻 `find_icon` 的挑选
+  语义），CI 的 lint job 第一步就跑它，秒级报错。
 
 ### 8.1 后端显示名、名称列与图标列（落地补充）
 
@@ -560,17 +579,24 @@ C:\Users\16695\AppData\Local\Programs\WorkBuddy\WorkBuddy.exe
 
 | job | 平台 | 做什么 |
 | --- | --- | --- |
-| `lint` | ubuntu | `cargo fmt --all --check`、`cargo clippy --workspace --all-targets -- -D warnings`、feature 组合矩阵 |
+| `lint` | ubuntu | `python3 tools/check_icons.py`、`cargo fmt --all --check`、`cargo clippy --workspace --all-targets -- -D warnings`、feature 组合矩阵 |
 | `test` | windows + ubuntu | `cargo test --workspace --locked`（Windows 上额外覆盖 `cefscanw` 的图标提取测试，那些是 `cfg(windows)` 的） |
 | `build` | windows + ubuntu | `cargo build --release --locked --workspace` → 收成 `dist/` → `upload-artifact` |
 
 要点与坑：
 
 - **`build` 依赖 `lint` + `test`**，两者都绿才出产物。
+- **`check_icons.py` 放在 lint 的第一步**，纯 Python 秒级出结果。它守的是 §8 里那两条
+  **只在 Unix 目标生效**的约束（`icons/icon.png` 必须存在且为 RGBA）。这类问题在
+  Windows 上根本复现不了——第一次推 CI 时就是它让 Linux 编译在 5 分钟后才炸在
+  `generate_context!` 里。
 - **Linux 每个 job 都要装 webkit 开发包**（`libwebkit2gtk-4.1-dev`、`librsvg2-dev`）。
   即使只跑测试也要装：`cefscanw` 在 workspace 里，`cargo test --workspace` 会编译它。
-  没有用 `tray-icon` 特性，所以不需要 `libappindicator3-dev`。
   **`ubuntu-22.04` 不行**——它只有 webkit2gtk-4.0，Tauri 2 要 4.1。
+- **不需要 `libappindicator3-dev`**。tauri 在 Linux 上确实会把 `tray-icon` →
+  `libappindicator` 拉进依赖图（Cargo 会下载它），但 `libappindicator-sys` 是用
+  `libloading` 在**运行时 dlopen** `libayatana-appindicator3.so.1` 的，构建期不链接它，
+  所以没有对应的 dev 包也编得过。
 - **产物里带 README + LICENSE**，下载下来就是一个自包含目录；`build` 之后跑一次
   `cefscan --version` / `--help` 当冒烟，`cefscanw` 是 GUI 不在 CI 里启动。
 - **feature 组合矩阵**（`--no-default-features` 的四种组合）单列一步，防止
