@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""生成 cefscanw 的 Windows 图标（纯标准库，不依赖 Pillow）。
+"""生成 cefscanw 的图标（纯标准库，不依赖 Pillow）。
 
 图标语义：一块深色圆角底 + 蓝色放大镜，表示"扫描/查找"。
 
@@ -7,8 +7,17 @@
 
     python tools/make_icon.py crates/cefscan-desktop/src-tauri/icons
 
-输出 ``icon.ico``（多尺寸 32bpp BMP 条目），tauri-build 生成 Windows
-资源文件时需要它。脚本可重复执行，结果确定。
+输出两个文件，都不可省略：
+
+- ``icon.ico``（多尺寸 32bpp BMP 条目）——tauri-build 生成 Windows 资源文件时要用。
+- ``icon.png``（256×256 RGBA）——tauri-codegen 在 **Unix 目标**上取默认窗口图标时
+  要用。它在 ``bundle.icon`` 里找第一个 ``.png``，找不到就退回硬编码的
+  ``icons/icon.png``；再找不到就在 ``generate_context!`` 里 panic
+  （"failed to open icon ... No such file or directory"）。
+  注意这张图**必须是 RGBA**：``CachedIcon::new_png`` 会检查
+  ``png::ColorType::Rgba``，调色板或 RGB 都会 panic。
+
+脚本可重复执行，结果确定。
 """
 
 from __future__ import annotations
@@ -16,10 +25,14 @@ from __future__ import annotations
 import math
 import struct
 import sys
+import zlib
 from pathlib import Path
 
-# 输出尺寸（像素）。16/32 给任务栏与列表，48/64 给桌面，128/256 给大图标视图。
+# ICO 的输出尺寸（像素）。16/32 给任务栏与列表，48/64 给桌面，128/256 给大图标视图。
 SIZES = (16, 32, 48, 64, 128, 256)
+
+# PNG 的尺寸：只出一张给 Linux 当窗口图标，256 够用。
+PNG_SIZE = 256
 
 # 超采样倍数：先在高分辨率画再盒式降采样，得到抗锯齿边缘。
 SUPERSAMPLE = 4
@@ -176,10 +189,17 @@ def _bmp_payload(size: int, rgba: bytes) -> bytes:
     return header + bytes(pixels) + bytes(mask)
 
 
-def build_ico(destination: Path) -> None:
+def _render_cached(size: int, cache: dict[int, bytes]) -> bytes:
+    """渲染并按尺寸缓存：256 那张很贵，ICO 和 PNG 都要用，别算两遍。"""
+    if size not in cache:
+        cache[size] = render_rgba(size)
+    return cache[size]
+
+
+def build_ico(destination: Path, cache: dict[int, bytes]) -> None:
     images = []
     for size in SIZES:
-        payload = _bmp_payload(size, render_rgba(size))
+        payload = _bmp_payload(size, _render_cached(size, cache))
         images.append((size, payload))
 
     directory = struct.pack("<HHH", 0, 1, len(images))
@@ -209,9 +229,56 @@ def build_ico(destination: Path) -> None:
     print(f"wrote {destination} ({destination.stat().st_size} bytes, {len(images)} sizes)")
 
 
+def _png_chunk(tag: bytes, data: bytes) -> bytes:
+    """PNG 分块：长度 + 标签 + 数据 + CRC32（校验范围是标签+数据）。"""
+    return (
+        struct.pack(">I", len(data))
+        + tag
+        + data
+        + struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF)
+    )
+
+
+def build_png(destination: Path, size: int, cache: dict[int, bytes]) -> None:
+    """写一张 8 位 RGBA（色彩类型 6）的 PNG。
+
+    色彩类型必须是 6：tauri-codegen 会拒绝非 RGBA 的图标。
+    """
+    rgba = _render_cached(size, cache)
+    stride = size * 4
+
+    # 每行前面加一个滤波器字节（0 = None），逐行原样存。
+    raw = bytearray()
+    for row in range(size):
+        raw.append(0)
+        raw += rgba[row * stride : (row + 1) * stride]
+
+    header = struct.pack(
+        ">IIBBBBB",
+        size,  # width
+        size,  # height
+        8,  # bit depth
+        6,  # color type = RGBA
+        0,  # compression = deflate
+        0,  # filter method
+        0,  # interlace = none
+    )
+
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    with destination.open("wb") as handle:
+        handle.write(b"\x89PNG\r\n\x1a\n")
+        handle.write(_png_chunk(b"IHDR", header))
+        handle.write(_png_chunk(b"IDAT", zlib.compress(bytes(raw), 9)))
+        handle.write(_png_chunk(b"IEND", b""))
+
+    print(f"wrote {destination} ({destination.stat().st_size} bytes, {size}x{size} RGBA)")
+
+
 def main(argv: list[str]) -> int:
     target = Path(argv[1]) if len(argv) > 1 else Path("icons")
-    build_ico(target / "icon.ico")
+    cache: dict[int, bytes] = {}
+    build_ico(target / "icon.ico", cache)
+    build_png(target / "icon.png", PNG_SIZE, cache)
     return 0
 
 
