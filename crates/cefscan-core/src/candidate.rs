@@ -16,13 +16,15 @@ use crate::model::CandidateKind;
 /// 在 Windows / macOS 上按 ASCII 小写比较（文件系统大小写不敏感），
 /// 在 Linux 上大小写敏感。
 pub fn classify_candidate_name(name: &OsStr) -> Option<CandidateKind> {
+    // `lowered` 得活到 `name` 用完为止，所以不能收进块里；Linux 上压根不构造它。
     #[cfg(any(target_os = "windows", target_os = "macos"))]
-    let name: Cow<'_, OsStr> = match name.to_str() {
+    let lowered: Cow<'_, OsStr> = match name.to_str() {
         Some(text) => Cow::Owned(OsString::from(text.to_ascii_lowercase())),
         None => Cow::Borrowed(name),
     };
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
+    let name = lowered.as_encoded_bytes();
     #[cfg(not(any(target_os = "windows", target_os = "macos")))]
-    let name: Cow<'_, OsStr> = Cow::Borrowed(name);
     let name = name.as_encoded_bytes();
 
     // `chrome_100_percent.pak`：Chromium 系通用的资源包，Electron/CEF/Chrome 都带。
