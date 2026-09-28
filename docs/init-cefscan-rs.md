@@ -547,23 +547,39 @@ C:\Users\16695\AppData\Local\Programs\WorkBuddy\WorkBuddy.exe
 
 ### 10.3 CI（`.github/workflows/ci.yml`）
 
-```yaml
-jobs:
-  windows:  # 主平台
-    - cargo fmt --all -- --check
-    - cargo test --locked --all-targets
-    - cargo clippy --locked --all-targets -- -D warnings
-    - cargo check --no-default-features / --features everything  # feature 组合矩阵
-    - cargo build --locked --release
-    - 冒烟：cefscan --root <fixture> --format json | jq empty
-  ubuntu:   # 保证跨平台抽象没被写死
-    - cargo check + cargo test（walk 后端路径）
-```
+**已落地**。三个 job，触发条件是 push 到 main、打 `v*` tag、PR、手动：
 
-- `cargo llvm-cov` 出覆盖率，core crate 门槛先定 70%，逐步提到 85%。
-- 依赖审计 `cargo deny check`（license + advisory）。
-- 有 `unsafe`（Windows FFI）必须过 `cargo miri test`（`unsafe-miri-ci`）；每个 `unsafe` 块写 `// SAFETY:` 注释（`unsafe-safety-comment`）。
-- MSRV：`rust-version = "1.92.0"`，CI 用 dtolnay/rust-toolchain 锁同一版本并 `cargo +1.92.0 check`。
+| job | 平台 | 做什么 |
+| --- | --- | --- |
+| `lint` | ubuntu | `cargo fmt --all --check`、`cargo clippy --workspace --all-targets -- -D warnings`、feature 组合矩阵 |
+| `test` | windows + ubuntu | `cargo test --workspace --locked`（Windows 上额外覆盖 `cefscanw` 的图标提取测试，那些是 `cfg(windows)` 的） |
+| `build` | windows + ubuntu | `cargo build --release --locked --workspace` → 收成 `dist/` → `upload-artifact` |
+
+要点与坑：
+
+- **`build` 依赖 `lint` + `test`**，两者都绿才出产物。
+- **Linux 每个 job 都要装 webkit 开发包**（`libwebkit2gtk-4.1-dev`、`librsvg2-dev`）。
+  即使只跑测试也要装：`cefscanw` 在 workspace 里，`cargo test --workspace` 会编译它。
+  没有用 `tray-icon` 特性，所以不需要 `libappindicator3-dev`。
+  **`ubuntu-22.04` 不行**——它只有 webkit2gtk-4.0，Tauri 2 要 4.1。
+- **产物里带 README + LICENSE**，下载下来就是一个自包含目录；`build` 之后跑一次
+  `cefscan --version` / `--help` 当冒烟，`cefscanw` 是 GUI 不在 CI 里启动。
+- **feature 组合矩阵**（`--no-default-features` 的四种组合）单列一步，防止
+  `serde` / `everything` 悄悄退化成"其实必须开"。
+- `--locked` 全用上，保证 CI 与 `Cargo.lock` 一致。
+- 平台矩阵只出 **x86_64**。aarch64 的话：Linux 侧要交叉编译整套 webkit，成本高，
+  更好的做法是用 `ubuntu-24.04-arm` runner 单开一个 job；Windows 侧交叉编译
+  `aarch64-pc-windows-msvc` 可行（`.cargo/config.toml` 里已经留了 crt-static 配置）。
+
+**尚未做**（原计划里有，按优先级排）：
+
+- `cargo llvm-cov` 覆盖率，core crate 门槛先定 70%。
+- `cargo deny check`（license + advisory）。
+- `cargo miri test` 跑 `unsafe`（Windows FFI）——注意 miri 跑不了 Win32 FFI，
+  实际能覆盖的只有纯逻辑部分。`// SAFETY:` 注释已经在写了。
+- `cargo +1.92.0 check` 显式验 MSRV。现在靠 `rust-version` 字段兜底
+  （toolchain 低于该版本时 cargo 直接报错），CI 用的是 `@stable`。
+- tag 触发时自动建 GitHub Release 并附产物（属于 M7）。
 
 ### 10.4 Cargo profile（release）
 

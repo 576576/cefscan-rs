@@ -1,16 +1,31 @@
 # cefscan-rs
 
+[![CI](https://github.com/576576/cefscan-rs/actions/workflows/ci.yml/badge.svg)](https://github.com/576576/cefscan-rs/actions/workflows/ci.yml)
+
 找出电脑上所有基于 Chromium 内核的应用（CEF / Electron / NWJS / CefSharp / Edge / Chrome），
 给出它们的磁盘占用与是否正在运行。
 
-产出两个**互不依赖、可独立运行**的 Windows 可执行文件：
+产出两个**互不依赖、可独立运行**的可执行文件：
 
 | 文件 | 类型 | 说明 |
 | --- | --- | --- |
-| `cefscan.exe` | 控制台程序 | 纯 CLI，输出 table / json / ndjson / csv / toml |
-| `cefscanw.exe` | 窗口程序 | Tauri 2 GUI，内嵌前端，无控制台 |
+| `cefscan.exe` / `cefscan` | 控制台程序 | 纯 CLI，输出 table / json / ndjson / csv / toml |
+| `cefscanw.exe` / `cefscanw` | 窗口程序 | Tauri 2 GUI，内嵌前端，无控制台 |
 
 两者都静态链接同一个引擎 `cefscan-core`，GUI 不调用 CLI、不依赖 CLI 的存在。
+
+**平台**：主平台是 Windows。Linux 上也能构建运行（遍历后端 + GUI 都可用），
+但两处功能是 Windows 专属：索引后端（Everything IPC）与表格里的图标列。
+
+## 预编译产物
+
+CI 在 `main` 分支、PR 和 `v*` tag 上跑，并通过 `build` job 上传可下载的产物
+（Actions 页面 → 对应 run → Artifacts）：
+
+| 产物 | 内容 |
+| --- | --- |
+| `cefscan-windows-x86_64` | `cefscan.exe`、`cefscanw.exe`、`README.md`、`LICENSE` |
+| `cefscan-linux-x86_64` | `cefscan`、`cefscanw`、`README.md`、`LICENSE` |
 
 ## 构建
 
@@ -29,6 +44,14 @@ cargo build --release
 cargo build --release -p cefscan-cli      # 只要 cefscan.exe
 cargo build --release -p cefscanw         # 只要 cefscanw.exe
 ```
+
+Linux 上编译 `cefscanw` 需要 Tauri 2 的系统依赖：
+
+```bash
+sudo apt-get install -y libwebkit2gtk-4.1-dev librsvg2-dev
+```
+
+（Ubuntu 22.04 不行，它只有 webkit2gtk-4.0，Tauri 2 要 4.1。）
 
 GUI 运行时依赖系统自带的 WebView2（Windows 10/11 默认已装）。图标由
 `tools/make_icon.py`（纯标准库）生成，产物已入库，正常构建无需重跑。
@@ -88,8 +111,12 @@ cefscan --format ndjson | jq -r .path     # 流式消费
 ## 测试
 
 ```bash
-cargo test --release --workspace    # 单测 + doctest
+cargo test --workspace              # 单测 + doctest
+cargo fmt --all --check             # 格式
+cargo clippy --workspace --all-targets -- -D warnings
 ```
+
+上面三条就是 CI 里跑的全部检查（见 `.github/workflows/ci.yml`）。
 
 GUI 另有一个**手动**冒烟测试，会真的去点窗口，验证 Tauri command / Channel /
 前端渲染这条链路（不进 `cargo test`）：
@@ -98,6 +125,7 @@ GUI 另有一个**手动**冒烟测试，会真的去点窗口，验证 Tauri co
 cargo build --release
 ./target/release/cefscanw.exe &
 python tools/gui_smoke.py out.png C:/Users/me 6 20
+CEFSCAN_SMOKE_EXPAND=1 python tools/gui_smoke.py out.png C:/Users/me 6   # 额外验证行展开
 ```
 
 它不写死控件坐标，而是从像素里认按钮和输入框，改布局一般不用改脚本。
