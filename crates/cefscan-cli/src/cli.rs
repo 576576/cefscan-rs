@@ -7,11 +7,11 @@ use clap::{Parser, ValueEnum};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum BackendArg {
-    /// 优先索引后端（Windows 上的 Everything IPC），不可用则回落遍历
+    /// 优先索引后端（Windows 上的 Everything IPC），不可用则回落到 cefscan 遍历
     Auto,
     /// 只用索引后端
     Index,
-    /// 只用文件系统遍历
+    /// 只用 cefscan 遍历后端
     Filesystem,
 }
 

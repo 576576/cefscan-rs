@@ -139,37 +139,45 @@ fn deduplicated_total(apps: &[AppInfo]) -> u64 {
     total
 }
 
+/// 遍历后端的展示名。
+///
+/// 不再叫 "filesystem"：对用户来说"后端"就是"谁去找的"，遍历后端就是 cefscan
+/// 自己，所以直接叫 cefscan。索引后端则显示**实际探测到的服务名**（如 Everything），
+/// 而不是笼统的 "index"。
+const FILESYSTEM_BACKEND: &str = "cefscan";
+
 /// 取得候选文件。索引后端失败时按策略回落。
 fn discover(options: &ScanOptions) -> Result<(Vec<Candidate>, &'static str, u64), ScanError> {
     match options.backend {
         Backend::Filesystem => {
             let result = walk(options)?;
-            Ok((result.candidates, "filesystem", result.dirs_scanned))
+            Ok((result.candidates, FILESYSTEM_BACKEND, result.dirs_scanned))
         }
         Backend::Index => match try_index_candidates(options) {
-            Ok(candidates) => Ok((candidates, "index", 0)),
+            Ok((candidates, service)) => Ok((candidates, service, 0)),
             Err(error) => Err(ScanError::BothBackendsFailed {
                 index: error.to_string(),
                 fallback: "fallback disabled by --backend index".into(),
             }),
         },
         Backend::Auto => match try_index_candidates(options) {
-            Ok(candidates) => Ok((candidates, "index", 0)),
+            Ok((candidates, service)) => Ok((candidates, service, 0)),
             Err(_index_error) => {
                 let result = walk(options)?;
-                Ok((result.candidates, "filesystem", result.dirs_scanned))
+                Ok((result.candidates, FILESYSTEM_BACKEND, result.dirs_scanned))
             }
         },
     }
 }
 
+/// 索引后端返回候选**和它实际用的服务名**，服务名直接进结果，用户能看到是谁干的活。
 #[cfg(all(feature = "everything", target_os = "windows"))]
-fn try_index_candidates(options: &ScanOptions) -> io::Result<Vec<Candidate>> {
+fn try_index_candidates(options: &ScanOptions) -> io::Result<(Vec<Candidate>, &'static str)> {
     everything::query_candidates(options)
 }
 
 #[cfg(not(all(feature = "everything", target_os = "windows")))]
-fn try_index_candidates(_options: &ScanOptions) -> io::Result<Vec<Candidate>> {
+fn try_index_candidates(_options: &ScanOptions) -> io::Result<(Vec<Candidate>, &'static str)> {
     Err(io::Error::new(
         io::ErrorKind::Unsupported,
         "the index backend requires Windows and the `everything` feature",

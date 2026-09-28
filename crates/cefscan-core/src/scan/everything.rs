@@ -32,6 +32,9 @@ use crate::candidate::classify_candidate_name;
 use crate::filter::Filter;
 use crate::model::{Candidate, ScanOptions};
 
+/// 索引服务的展示名。进结果里给用户看，所以不用内部代号 "index"。
+pub const SERVICE_NAME: &str = "Everything";
+
 /// Everything 各版本的隐藏窗口类名，按兼容性顺序探测。
 const EVERYTHING_WINDOW_CLASSES: [&str; 2] = [
     "EVERYTHING_TASKBAR_NOTIFICATION",
@@ -49,8 +52,8 @@ const LIST_HEADER_SIZE: usize = 7 * size_of::<u32>();
 const ITEM_SIZE: usize = 3 * size_of::<u32>();
 const MAX_ITEM_COUNT: usize = 1_000_000;
 
-/// 查询 Everything。
-pub fn query_candidates(options: &ScanOptions) -> io::Result<Vec<Candidate>> {
+/// 查询 Everything。成功时连服务名一起返回，供结果里展示。
+pub fn query_candidates(options: &ScanOptions) -> io::Result<(Vec<Candidate>, &'static str)> {
     let timeout = options.index_timeout.max(Duration::from_millis(100));
     let reply = Arc::new(Mutex::new(None::<Vec<u8>>));
 
@@ -118,7 +121,7 @@ pub fn query_candidates(options: &ScanOptions) -> io::Result<Vec<Candidate>> {
         }
     }
     candidates.sort_by(|a, b| a.path.cmp(&b.path));
-    Ok(candidates)
+    Ok((candidates, SERVICE_NAME))
 }
 
 // ---------- 协议编解码 ----------
