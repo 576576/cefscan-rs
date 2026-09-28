@@ -112,7 +112,9 @@ fn inspection_for(
         return (dir.to_path_buf(), own);
     }
     match dir.parent().and_then(|parent| inspections.get(parent)) {
-        Some(parent) if !parent.is_empty_ref() => (dir.parent().unwrap_or(dir).to_path_buf(), parent.clone()),
+        Some(parent) if !parent.is_empty_ref() => {
+            (dir.parent().unwrap_or(dir).to_path_buf(), parent.clone())
+        }
         _ => (dir.to_path_buf(), own),
     }
 }
@@ -236,7 +238,10 @@ mod tests {
         assert_eq!(apps[0].kind, AppKind::Cef);
 
         let apps = group(
-            &[candidate("/apps/pak/chrome_100_percent.pak", CandidateKind::Pak)],
+            &[candidate(
+                "/apps/pak/chrome_100_percent.pak",
+                CandidateKind::Pak,
+            )],
             1,
         );
         assert_eq!(apps[0].kind, AppKind::Unknown);

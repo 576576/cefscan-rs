@@ -64,12 +64,17 @@ pub enum ScanEvent {
         elapsed_ms: u64,
         dirs_scanned: u64,
     },
-    Error { message: String },
+    Error {
+        message: String,
+    },
 }
 
 /// 流式扫描：每识别出一个应用就立刻推给前端，前端逐条渲染。
 #[tauri::command]
-async fn scan_apps(channel: Channel<ScanEvent>, request: Option<ScanRequest>) -> Result<(), String> {
+async fn scan_apps(
+    channel: Channel<ScanEvent>,
+    request: Option<ScanRequest>,
+) -> Result<(), String> {
     let request = request.unwrap_or(ScanRequest {
         roots: Vec::new(),
         backend: None,
@@ -152,7 +157,10 @@ fn reveal_in_explorer(path: &std::path::Path) -> Result<(), String> {
         .chain(OsStr::new("\"").encode_wide())
         .chain(once(0))
         .collect();
-    let target: Vec<u16> = OsStr::new("explorer.exe").encode_wide().chain(once(0)).collect();
+    let target: Vec<u16> = OsStr::new("explorer.exe")
+        .encode_wide()
+        .chain(once(0))
+        .collect();
     let operation: Vec<u16> = OsStr::new("open").encode_wide().chain(once(0)).collect();
 
     // SAFETY: operation / target / argument 都是 NUL 结尾，且在本函数内保持有效。
@@ -177,7 +185,11 @@ fn reveal_in_explorer(path: &std::path::Path) -> Result<(), String> {
 #[cfg(not(target_os = "windows"))]
 fn reveal_in_explorer(path: &std::path::Path) -> Result<(), String> {
     let directory = path.parent().unwrap_or(path);
-    let program = if cfg!(target_os = "macos") { "open" } else { "xdg-open" };
+    let program = if cfg!(target_os = "macos") {
+        "open"
+    } else {
+        "xdg-open"
+    };
     std::process::Command::new(program)
         .arg(directory)
         .spawn()

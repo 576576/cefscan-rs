@@ -190,7 +190,10 @@ mod tests {
 
     #[test]
     fn every_signature_maps_to_its_kind() {
-        assert_eq!(standard(b"third_party/electron_node"), Some(AppKind::Electron));
+        assert_eq!(
+            standard(b"third_party/electron_node"),
+            Some(AppKind::Electron)
+        );
         assert_eq!(
             standard(b"register_atom_browser_web_contents"),
             Some(AppKind::Electron)

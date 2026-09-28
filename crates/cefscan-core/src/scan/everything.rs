@@ -22,10 +22,9 @@ use windows_sys::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, WPARAM};
 use windows_sys::Win32::System::DataExchange::COPYDATASTRUCT;
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DestroyWindow, FindWindowW, GWLP_USERDATA,
-    GetWindowLongPtrW, HWND_MESSAGE, MSG, MSGFLT_ALLOW, PM_REMOVE, PeekMessageW,
-    RegisterClassExW, SMTO_ABORTIFHUNG, SendMessageTimeoutW, SetWindowLongPtrW, WM_COPYDATA,
-    WNDCLASSEXW,
+    CreateWindowExW, DefWindowProcW, DestroyWindow, FindWindowW, GWLP_USERDATA, GetWindowLongPtrW,
+    HWND_MESSAGE, MSG, MSGFLT_ALLOW, PM_REMOVE, PeekMessageW, RegisterClassExW, SMTO_ABORTIFHUNG,
+    SendMessageTimeoutW, SetWindowLongPtrW, WM_COPYDATA, WNDCLASSEXW,
 };
 
 use crate::candidate::classify_candidate_name;
@@ -187,9 +186,9 @@ fn parse_reply(bytes: &[u8]) -> io::Result<Vec<ReplyItem>> {
 }
 
 fn read_u32(bytes: &[u8], offset: usize) -> io::Result<u32> {
-    let slice = bytes.get(offset..offset + size_of::<u32>()).ok_or_else(|| {
-        io::Error::new(io::ErrorKind::InvalidData, "truncated Everything reply")
-    })?;
+    let slice = bytes
+        .get(offset..offset + size_of::<u32>())
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "truncated Everything reply"))?;
     Ok(u32::from_le_bytes(slice.try_into().unwrap()))
 }
 
@@ -294,7 +293,11 @@ impl ReplyWindow {
 
         // SAFETY: 窗口刚创建，写入 GWLP_USERDATA 安全。
         unsafe {
-            SetWindowLongPtrW(handle, GWLP_USERDATA, Arc::into_raw(Arc::clone(&reply)) as isize);
+            SetWindowLongPtrW(
+                handle,
+                GWLP_USERDATA,
+                Arc::into_raw(Arc::clone(&reply)) as isize,
+            );
         }
 
         // Everything 可能是更高完整性级别启动的；放开过滤器才收得到 WM_COPYDATA。
@@ -322,7 +325,12 @@ impl ReplyWindow {
     fn pump_until_reply(&self, timeout: Duration) -> io::Result<()> {
         let deadline = Instant::now() + timeout;
         loop {
-            if self.reply.lock().map(|guard| guard.is_some()).unwrap_or(false) {
+            if self
+                .reply
+                .lock()
+                .map(|guard| guard.is_some())
+                .unwrap_or(false)
+            {
                 return Ok(());
             }
             if Instant::now() >= deadline {
@@ -333,8 +341,7 @@ impl ReplyWindow {
             }
             // SAFETY: MSG 由 PeekMessageW 填充。
             let mut message: MSG = unsafe { std::mem::zeroed() };
-            let has_message =
-                unsafe { PeekMessageW(&mut message, self.handle, 0, 0, PM_REMOVE) };
+            let has_message = unsafe { PeekMessageW(&mut message, self.handle, 0, 0, PM_REMOVE) };
             if has_message != 0 {
                 let _ = unsafe {
                     windows_sys::Win32::UI::WindowsAndMessaging::DispatchMessageW(&message)
@@ -452,9 +459,13 @@ mod tests {
 
     #[test]
     fn reply_parser_reads_path_and_file_name() {
-        let items = parse_reply(&reply_with_one_item(r"C:\Program Files\示例", "libcef.dll")).unwrap();
+        let items =
+            parse_reply(&reply_with_one_item(r"C:\Program Files\示例", "libcef.dll")).unwrap();
         assert_eq!(items.len(), 1);
-        assert_eq!(items[0].path.as_deref(), Some(std::path::Path::new(r"C:\Program Files\示例")));
+        assert_eq!(
+            items[0].path.as_deref(),
+            Some(std::path::Path::new(r"C:\Program Files\示例"))
+        );
         assert_eq!(items[0].file_name.as_ref().unwrap(), "libcef.dll");
     }
 

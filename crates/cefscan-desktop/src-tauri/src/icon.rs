@@ -42,16 +42,12 @@ mod imp {
     use std::ptr::null_mut;
 
     use windows_sys::Win32::Graphics::Gdi::{
-        BITMAP, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS, DeleteObject, GetDC,
+        BI_RGB, BITMAP, BITMAPINFO, BITMAPINFOHEADER, DIB_RGB_COLORS, DeleteObject, GetDC,
         GetDIBits, GetObjectW, HBITMAP, HDC, ReleaseDC,
     };
     use windows_sys::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx};
-    use windows_sys::Win32::UI::Shell::{
-        SHFILEINFOW, SHGFI_ICON, SHGFI_LARGEICON, SHGetFileInfoW,
-    };
-    use windows_sys::Win32::UI::WindowsAndMessaging::{
-        DestroyIcon, GetIconInfo, HICON, ICONINFO,
-    };
+    use windows_sys::Win32::UI::Shell::{SHFILEINFOW, SHGFI_ICON, SHGFI_LARGEICON, SHGetFileInfoW};
+    use windows_sys::Win32::UI::WindowsAndMessaging::{DestroyIcon, GetIconInfo, HICON, ICONINFO};
 
     /// 图标最大边长。`SHGFI_LARGEICON` 一般给 32，个别皮肤给到 48，再大就截。
     const MAX_SIDE: i32 = 128;
@@ -170,7 +166,7 @@ mod imp {
         // 现代 32bpp 图标自带 alpha 通道；老式图标这一列会全是 0。
         let has_alpha = color_bgra
             .as_ref()
-            .is_some_and(|bytes| bytes.chunks_exact(4).any(|px| px[3] != 0));
+            .is_some_and(|bytes| bytes.as_chunks::<4>().0.iter().any(|px| px[3] != 0));
         let mask_bgra = if has_alpha {
             None
         } else {
@@ -182,7 +178,7 @@ mod imp {
 
         let color_bgra = color_bgra?;
         let mut rgba = Vec::with_capacity(color_bgra.len());
-        for (index, px) in color_bgra.chunks_exact(4).enumerate() {
+        for (index, px) in color_bgra.as_chunks::<4>().0.iter().enumerate() {
             let alpha = if has_alpha {
                 px[3]
             } else {
@@ -210,15 +206,17 @@ mod imp {
         if bitmap.is_null() {
             return None;
         }
-        let mut info = BITMAPINFO::default();
-        info.bmiHeader = BITMAPINFOHEADER {
-            biSize: size_of::<BITMAPINFOHEADER>() as u32,
-            biWidth: side,
-            // 负高度 = 自顶向下，省掉一次上下翻转。
-            biHeight: -side,
-            biPlanes: 1,
-            biBitCount: 32,
-            biCompression: BI_RGB,
+        let mut info = BITMAPINFO {
+            bmiHeader: BITMAPINFOHEADER {
+                biSize: size_of::<BITMAPINFOHEADER>() as u32,
+                biWidth: side,
+                // 负高度 = 自顶向下，省掉一次上下翻转。
+                biHeight: -side,
+                biPlanes: 1,
+                biBitCount: 32,
+                biCompression: BI_RGB,
+                ..Default::default()
+            },
             ..Default::default()
         };
         let mut buffer = vec![0u8; (side * side * 4) as usize];
@@ -311,7 +309,7 @@ mod tests {
 
         let rgba = &buffer[..info.buffer_size()];
         assert!(
-            rgba.chunks_exact(4).any(|px| px[3] > 0),
+            rgba.as_chunks::<4>().0.iter().any(|px| px[3] > 0),
             "图标不该是全透明的"
         );
     }

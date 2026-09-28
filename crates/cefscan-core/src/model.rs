@@ -55,7 +55,11 @@ impl AppKind {
 
     /// 取更强的那个（`None` 视为最弱）。
     pub fn strongest(self, other: Self) -> Self {
-        if other.rank() > self.rank() { other } else { self }
+        if other.rank() > self.rank() {
+            other
+        } else {
+            self
+        }
     }
 }
 

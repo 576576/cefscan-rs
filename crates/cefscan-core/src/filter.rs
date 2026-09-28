@@ -14,8 +14,15 @@ use crate::model::ScanOptions;
 pub const PLATFORM_EXCLUDED_DIRS: &[&str] = &["winsxs", "servicing", "recovery"];
 
 #[cfg(target_os = "linux")]
-pub const PLATFORM_EXCLUDED_ROOTS: &[&str] =
-    &["/proc", "/sys", "/dev", "/run", "/tmp", "/boot", "/lost+found"];
+pub const PLATFORM_EXCLUDED_ROOTS: &[&str] = &[
+    "/proc",
+    "/sys",
+    "/dev",
+    "/run",
+    "/tmp",
+    "/boot",
+    "/lost+found",
+];
 
 #[cfg(target_os = "macos")]
 pub const PLATFORM_EXCLUDED_ROOTS: &[&str] = &["/dev", "/System/Volumes/Data", "/private/var/db"];
@@ -83,10 +90,11 @@ impl Filter {
     }
 
     fn in_roots(&self, path: &Path) -> bool {
-        self.roots
-            .is_empty()
-            .then_some(true)
-            .unwrap_or_else(|| self.roots.iter().any(|root| path_starts_with(path, root)))
+        if self.roots.is_empty() {
+            true
+        } else {
+            self.roots.iter().any(|root| path_starts_with(path, root))
+        }
     }
 
     fn is_excluded_dir_name(&self, name: &OsStr) -> bool {
@@ -106,12 +114,12 @@ impl Filter {
 }
 
 fn is_hidden(path: &Path) -> bool {
-    path.components().any(|c| component_is_hidden(c.as_os_str()))
+    path.components()
+        .any(|c| component_is_hidden(c.as_os_str()))
 }
 
 fn component_is_hidden(name: &OsStr) -> bool {
-    name.as_encoded_bytes().first() == Some(&b'.')
-        && name.as_encoded_bytes().len() > 1
+    name.as_encoded_bytes().first() == Some(&b'.') && name.as_encoded_bytes().len() > 1
 }
 
 fn is_trash_dir(name: &OsStr) -> bool {
@@ -151,10 +159,9 @@ fn ascii_fold(byte: u8) -> u8 {
 #[cfg(target_os = "windows")]
 fn is_platform_excluded(path: &Path) -> bool {
     path.components().any(|component| {
-        component
-            .as_os_str()
-            .to_str()
-            .is_some_and(|name| PLATFORM_EXCLUDED_DIRS.contains(&name.to_ascii_lowercase().as_str()))
+        component.as_os_str().to_str().is_some_and(|name| {
+            PLATFORM_EXCLUDED_DIRS.contains(&name.to_ascii_lowercase().as_str())
+        })
     })
 }
 
@@ -219,16 +226,26 @@ mod tests {
     #[test]
     fn trailing_names_must_not_be_prefix_matched() {
         // 只在 Windows 有意义，但两条断言在 Unix 上也应成立
-        assert!(path_starts_with(Path::new(r"C:\Windows\WinSxS\x"), Path::new(r"C:\Windows\WinSxS")));
-        assert!(
-            !path_starts_with(Path::new(r"C:\Windows\WinSxSBackup"), Path::new(r"C:\Windows\WinSxS"))
-        );
+        assert!(path_starts_with(
+            Path::new(r"C:\Windows\WinSxS\x"),
+            Path::new(r"C:\Windows\WinSxS")
+        ));
+        assert!(!path_starts_with(
+            Path::new(r"C:\Windows\WinSxSBackup"),
+            Path::new(r"C:\Windows\WinSxS")
+        ));
     }
 
     #[test]
     fn prefix_comparison_ignores_case_and_slash_direction() {
-        assert!(path_starts_with(Path::new(r"c:\WINDOWS\app"), Path::new(r"C:\Windows")));
-        assert!(path_starts_with(Path::new("C:/Windows/app"), Path::new(r"C:\Windows")));
+        assert!(path_starts_with(
+            Path::new(r"c:\WINDOWS\app"),
+            Path::new(r"C:\Windows")
+        ));
+        assert!(path_starts_with(
+            Path::new("C:/Windows/app"),
+            Path::new(r"C:\Windows")
+        ));
     }
 
     #[test]

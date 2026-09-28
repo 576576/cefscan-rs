@@ -16,8 +16,8 @@ use std::collections::VecDeque;
 use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Condvar, Mutex};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Condvar, Mutex};
 
 use crate::candidate::classify_candidate_name;
 use crate::error::ScanError;
@@ -213,21 +213,25 @@ fn resolve_threads(configured: usize) -> usize {
 /// 未指定 root 时推导默认起点。
 fn resolve_roots(options: &ScanOptions) -> Result<Vec<PathBuf>, ScanError> {
     if !options.roots.is_empty() {
-        return Ok(options.roots.iter().map(normalize_root).collect());
+        return Ok(options
+            .roots
+            .iter()
+            .map(|root| normalize_root(root.as_path()))
+            .collect());
     }
     default_roots()
 }
 
 /// 统一分隔符，避免输出里出现 `C:/Users\app` 这种混写。
 #[cfg(target_os = "windows")]
-fn normalize_root(root: &PathBuf) -> PathBuf {
+fn normalize_root(root: &Path) -> PathBuf {
     let text = root.to_string_lossy().replace('/', "\\");
     PathBuf::from(text)
 }
 
 #[cfg(not(target_os = "windows"))]
-fn normalize_root(root: &PathBuf) -> PathBuf {
-    root.clone()
+fn normalize_root(root: &Path) -> PathBuf {
+    root.to_path_buf()
 }
 
 #[cfg(target_os = "windows")]
@@ -298,7 +302,11 @@ mod tests {
         for dir in ["b", "a", "nested/deep"] {
             fs::create_dir_all(fixture.root.join(dir)).unwrap();
             fs::write(
-                fixture.root.join(dir).join(if cfg!(windows) { "libcef.dll" } else { "libcef.so" }),
+                fixture.root.join(dir).join(if cfg!(windows) {
+                    "libcef.dll"
+                } else {
+                    "libcef.so"
+                }),
                 b"data",
             )
             .unwrap();
@@ -310,27 +318,30 @@ mod tests {
         sorted.sort();
         assert_eq!(paths, sorted, "结果必须按路径排序");
         assert_eq!(found.candidates.len(), 3);
-        assert!(found.candidates.iter().all(|c| c.kind == CandidateKind::Cef));
+        assert!(
+            found
+                .candidates
+                .iter()
+                .all(|c| c.kind == CandidateKind::Cef)
+        );
     }
 
     #[test]
     fn pruned_subtrees_are_never_entered() {
         let fixture = fixture("prune");
         fs::create_dir_all(fixture.root.join("skipme")).unwrap();
-        fs::write(
-            fixture.root.join("skipme").join("libcef.dll"),
-            b"data",
-        )
-        .unwrap();
+        fs::write(fixture.root.join("skipme").join("libcef.dll"), b"data").unwrap();
         fs::write(fixture.root.join("libcef.dll"), b"data").unwrap();
 
         let found = walk(&options_for(&fixture.root, 4)).unwrap();
         assert_eq!(found.candidates.len(), 1);
         assert!(found.candidates[0].path.ends_with("libcef.dll"));
-        assert!(!found.candidates[0]
-            .path
-            .components()
-            .any(|c| c.as_os_str() == "skipme"));
+        assert!(
+            !found.candidates[0]
+                .path
+                .components()
+                .any(|c| c.as_os_str() == "skipme")
+        );
     }
 
     #[test]

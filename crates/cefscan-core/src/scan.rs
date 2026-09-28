@@ -129,8 +129,7 @@ fn deduplicated_total(apps: &[AppInfo]) -> u64 {
     let mut total = 0_u64;
     for app in apps {
         if apps.iter().any(|other| {
-            other.root != app.root
-                && crate::filter::path_starts_with(&app.root, &other.root)
+            other.root != app.root && crate::filter::path_starts_with(&app.root, &other.root)
         }) {
             continue;
         }

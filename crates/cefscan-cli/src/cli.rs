@@ -125,10 +125,7 @@ impl Cli {
     }
 
     pub fn min_size_bytes(&self) -> Result<Option<u64>, String> {
-        self.min_size
-            .as_deref()
-            .map(parse_size)
-            .transpose()
+        self.min_size.as_deref().map(parse_size).transpose()
     }
 }
 

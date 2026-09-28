@@ -3,9 +3,9 @@
 //! 这套判定是扫描成本的源头：遍历上百万条路径，只有极少数会被采纳，
 //! 后续的二进制签名扫描只作用在这些候选所在的目录上。
 
-use std::ffi::OsStr;
 #[cfg(any(target_os = "windows", target_os = "macos"))]
 use std::borrow::Cow;
+use std::ffi::OsStr;
 #[cfg(any(target_os = "windows", target_os = "macos"))]
 use std::ffi::OsString;
 
@@ -42,10 +42,7 @@ pub fn classify_candidate_name(name: &OsStr) -> Option<CandidateKind> {
 fn matches_cef_name(name: &[u8]) -> bool {
     matches!(name, b"libcef.so" | b"libcef.dll" | b"libcef.dylib")
         || name.starts_with(b"libcef.so.")
-        || matches!(
-            name,
-            b"chromium embedded framework" | b"electron framework"
-        )
+        || matches!(name, b"chromium embedded framework" | b"electron framework")
 }
 
 fn matches_node_name(name: &[u8]) -> bool {
@@ -83,7 +80,12 @@ mod tests {
 
     #[test]
     fn node_candidates_cover_every_platform_spelling() {
-        for name in ["libnode.so", "libnode.so.115", "libnode.dll", "libnode.dylib"] {
+        for name in [
+            "libnode.so",
+            "libnode.so.115",
+            "libnode.dll",
+            "libnode.dylib",
+        ] {
             assert_eq!(class(name), Some(CandidateKind::Node), "{name}");
         }
     }

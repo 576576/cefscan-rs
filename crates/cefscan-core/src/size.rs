@@ -97,7 +97,9 @@ pub fn sizes_parallel(paths: &[PathBuf], threads: usize) -> Vec<u64> {
     sizes_parallel_each(paths, threads, |index, _, size| {
         sizes.lock().expect("size slot poisoned")[index] = size;
     });
-    sizes.into_inner().unwrap_or_else(|error| error.into_inner())
+    sizes
+        .into_inner()
+        .unwrap_or_else(|error| error.into_inner())
 }
 
 #[cfg(test)]
@@ -113,7 +115,7 @@ mod tests {
         fs::write(root.join("nested").join("b.bin"), vec![0_u8; 250]).unwrap();
 
         assert_eq!(dir_size(&root), 350);
-        let parallel = sizes_parallel(&[root.clone()], 4);
+        let parallel = sizes_parallel(std::slice::from_ref(&root), 4);
         assert_eq!(parallel, vec![350]);
 
         fs::remove_dir_all(&root).unwrap();

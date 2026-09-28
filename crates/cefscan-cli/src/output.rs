@@ -84,11 +84,8 @@ fn render_table(apps: &[AppInfo]) -> String {
     let mut out = String::new();
     let _ = writeln!(
         out,
-        "{:<kind_width$}  {:>size_width$}  {:<3}  {}",
-        "KIND",
-        "SIZE",
-        "RUN",
-        "PATH"
+        "{:<kind_width$}  {:>size_width$}  {:<3}  PATH",
+        "KIND", "SIZE", "RUN"
     );
     for app in apps {
         let _ = writeln!(

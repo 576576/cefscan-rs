@@ -18,11 +18,7 @@ pub struct DirInspection {
 ///
 /// 这是候选目录数量级（几十到几百个）上的操作，但每个目录里可能躺着上百 MB
 /// 的可执行文件，所以调用方应当并行化。
-pub fn inspect_directory(
-    dir: &Path,
-    flavor: Flavor,
-    scanner: &SignatureScanner,
-) -> DirInspection {
+pub fn inspect_directory(dir: &Path, flavor: Flavor, scanner: &SignatureScanner) -> DirInspection {
     let Ok(entries) = fs::read_dir(dir) else {
         return DirInspection::default();
     };
@@ -82,8 +78,9 @@ pub fn inspect_directory(
             continue;
         }
 
-        let launchable =
-            !is_shared && !is_unwanted_executable(&name) && (is_executable || is_windows_executable);
+        let launchable = !is_shared
+            && !is_unwanted_executable(&name)
+            && (is_executable || is_windows_executable);
 
         let Ok(found) = scanner.scan_file(&path, flavor) else {
             continue;
@@ -99,12 +96,12 @@ pub fn inspect_directory(
             }
         }
 
-        if let Some((kind, needle)) = found {
-            if best.is_none_or(|(current, _)| kind.rank() > current.rank()) {
-                best = Some((kind, needle));
-                best_path = Some(path);
-                best_launchable = launchable;
-            }
+        if let Some((kind, needle)) = found
+            && best.is_none_or(|(current, _)| kind.rank() > current.rank())
+        {
+            best = Some((kind, needle));
+            best_path = Some(path);
+            best_launchable = launchable;
         }
     }
 
@@ -121,7 +118,10 @@ pub fn inspect_directory(
 }
 
 pub(crate) fn is_shared_library(name: &str) -> bool {
-    name.ends_with(".dll") || name.ends_with(".dylib") || name.ends_with(".so") || name.contains(".so.")
+    name.ends_with(".dll")
+        || name.ends_with(".dylib")
+        || name.ends_with(".so")
+        || name.contains(".so.")
 }
 
 /// 只对与内核相关的动态库做内容扫描，避免把上百个无关 DLL 全读一遍。

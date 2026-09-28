@@ -85,7 +85,10 @@ fn main() -> ExitCode {
         );
     }
     if args.verbose {
-        eprintln!("cefscan: 后端={} 候选={}", outcome.stats.backend, outcome.stats.candidates);
+        eprintln!(
+            "cefscan: 后端={} 候选={}",
+            outcome.stats.backend, outcome.stats.candidates
+        );
         for app in apps.iter().take(20) {
             if let Some(evidence) = app.evidence {
                 eprintln!("cefscan: {} <- {evidence}", app.path.display());

@@ -69,7 +69,8 @@ pub fn running_processes() -> HashSet<ProcessKey> {
             if unsafe { QueryFullProcessImageNameW(process.0, 0, buffer.as_mut_ptr(), &mut length) }
                 != 0
             {
-                let path = std::path::PathBuf::from(OsString::from_wide(&buffer[..length as usize]));
+                let path =
+                    std::path::PathBuf::from(OsString::from_wide(&buffer[..length as usize]));
                 processes.insert(normalize_windows_path(&path));
             }
         }

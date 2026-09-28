@@ -142,9 +142,8 @@ fn is_stop_segment(name: &str) -> bool {
 /// 且至少含一个数字。这样 `BeamNG.drive`（剥完是空）和 `360se6`（含字母）
 /// 都不会被误判成版本号。
 fn is_version_like(name: &str) -> bool {
-    let rest = name.trim_start_matches(|c: char| {
-        c.is_ascii_alphabetic() || c == '-' || c == '_' || c == '.'
-    });
+    let rest = name
+        .trim_start_matches(|c: char| c.is_ascii_alphabetic() || c == '-' || c == '_' || c == '.');
     if rest.is_empty() {
         return false;
     }
@@ -221,10 +220,7 @@ mod tests {
             display_name(Path::new(r"C:\Users\me\AppData\Local\Programs\tool.exe")),
             "tool"
         );
-        assert_eq!(
-            display_name(Path::new(r"C:\Program Files\app.exe")),
-            "app"
-        );
+        assert_eq!(display_name(Path::new(r"C:\Program Files\app.exe")), "app");
     }
 
     #[test]
