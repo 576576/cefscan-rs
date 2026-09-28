@@ -573,6 +573,21 @@ C:\Users\16695\AppData\Local\Programs\WorkBuddy\WorkBuddy.exe
 - 任何测试不得访问真实全盘；需要真实路径的用例一律 `#[ignore]` 并标注手工运行方式。
 - 时间/内存相关的断言只出现在 `benchmark` 子命令里，不进单测。
 
+#### 跨平台测试的两条硬规矩（第一次跑 Linux CI 换来的）
+
+1. **平台相关的断言必须显式门控。** 下面这些在 Windows 上必过、在 Linux 上必挂：
+
+   | 写法 | 在 Unix 上的结果 |
+   | --- | --- |
+   | 用 `C:\...` 字面量当路径 | `\` 不是分隔符，整条串被当成**一个文件名**，`file_stem()` 只剥掉 `.exe` |
+   | 断言大小写不敏感 | `classify_candidate_name` 在 Linux 上**刻意不小写化**，只有全小写拼写命中 |
+   | 把 fixture 建在 `std::env::temp_dir()` | Linux 上是 `/tmp`，在 `PLATFORM_EXCLUDED_ROOTS` 里 |
+   | 目录大小期望值只算文件 | ext4 上目录 `st_size` 是 4096，NTFS 上是 0 |
+   | 用空 roots 调 `walk()` 验证"不 panic" | 会走平台默认起点（Unix 是 `/`）**真的遍历整个文件系统** |
+
+   规矩：**平台相关的断言要么 `#[cfg(target_os = ...)]` 分开写，要么把规则本身抽成平台无关的纯函数**（见 `filter::excluded_root_hit`，那段是纯字符串比较，抽出来之后 Windows 上也能测）。
+2. **别用"跑起来不 panic"当测试。** 这种断言既抓不到回归，又可能偷偷扫全盘——`empty_roots_report_an_error` 就是这么在 Linux CI 上跑了 115 秒、还一条断言都没有的。要测推导逻辑就直接调 `resolve_roots`。
+
 ### 10.3 CI（`.github/workflows/ci.yml`）
 
 **已落地**。三个 job，触发条件是 push 到 main、打 `v*` tag、PR、手动：
@@ -580,12 +595,15 @@ C:\Users\16695\AppData\Local\Programs\WorkBuddy\WorkBuddy.exe
 | job | 平台 | 做什么 |
 | --- | --- | --- |
 | `lint` | ubuntu | `python3 tools/check_icons.py`、`cargo fmt --all --check`、`cargo clippy --workspace --all-targets -- -D warnings`、feature 组合矩阵 |
-| `test` | windows + ubuntu | `cargo test --workspace --locked`（Windows 上额外覆盖 `cefscanw` 的图标提取测试，那些是 `cfg(windows)` 的） |
+| `test` | windows + ubuntu | `cargo test --workspace --locked --no-fail-fast`（Windows 上额外覆盖 `cefscanw` 的图标提取测试，那些是 `cfg(windows)` 的） |
 | `build` | windows + ubuntu | `cargo build --release --locked --workspace` → 收成 `dist/` → `upload-artifact` |
 
 要点与坑：
 
 - **`build` 依赖 `lint` + `test`**，两者都绿才出产物。
+- **`--no-fail-fast` 不能省**。cargo 默认遇到第一个失败的测试目标就停，第一次跑 Linux
+  时只看到 `cefscan-core` 的 7 个失败，doctest 和 `cefscanw` 的测试根本没跑到——
+  一次跑完才能拿到完整清单。
 - **`check_icons.py` 放在 lint 的第一步**，纯 Python 秒级出结果。它守的是 §8 里那两条
   **只在 Unix 目标生效**的约束（`icons/icon.png` 必须存在且为 RGBA）。这类问题在
   Windows 上根本复现不了——第一次推 CI 时就是它让 Linux 编译在 5 分钟后才炸在
@@ -605,6 +623,28 @@ C:\Users\16695\AppData\Local\Programs\WorkBuddy\WorkBuddy.exe
 - 平台矩阵只出 **x86_64**。aarch64 的话：Linux 侧要交叉编译整套 webkit，成本高，
   更好的做法是用 `ubuntu-24.04-arm` runner 单开一个 job；Windows 侧交叉编译
   `aarch64-pc-windows-msvc` 可行（`.cargo/config.toml` 里已经留了 crt-static 配置）。
+
+#### 第一次真跑 CI 暴露出来的问题（值得留着）
+
+Linux 这一列此前**从来没跑过**，一次就翻出四类只在 Unix 上出现的问题：
+
+| # | 现象 | 根因 |
+| --- | --- | --- |
+| 1 | Linux 编译在 `generate_context!` panic | 缺 `icons/icon.png`（见 §8 图标表） |
+| 2 | `walk` 两个测试：`dirs_scanned` 只有 1 | fixture 建在 `/tmp`，而 `/tmp` 在 Unix 的 `PLATFORM_EXCLUDED_ROOTS` 里 |
+| 3 | `size` 测试期望 350 实得 4446 | `dir_size` 把目录 inode 的 `st_size`（ext4 上 4096）也累加了 |
+| 4 | `naming` / `candidate` 共 4 个断言 | 硬编码 `C:\...` 字面量 + 断言大小写不敏感 |
+
+第 2 条的修法顺带修掉一个真 bug：Unix 的排除名单原本**无条件**生效，导致
+`cefscan --root /tmp/foo` 静默返回空。现在规则改成「被排除的根若落在某个显式 root
+之内或与之相等，则不再排除」，`--root /` 这种等于全盘的写法仍然走名单。
+排查过程中还发现 `path_starts_with` 在 **root 以分隔符结尾**时（`C:\`、`/`、
+或者用户敲的 `--root "C:\foo\"`）边界判断失败，`in_roots` 会把整棵子树挡掉——
+所以 `cefscan --root C:\` 之前也是扫不出东西的。两处都已修并补了测试。
+
+**教训**：只在主开发平台（Windows）跑测试，是发现不了这四类问题的；反过来，
+本地也没有能跑 Linux 测试的环境（没有 WSL/容器），所以**要么把规则抽成平台无关的
+纯函数**（`filter::excluded_root_hit` 就是这么来的），**要么就靠 CI 兜底**。
 
 **尚未做**（原计划里有，按优先级排）：
 
