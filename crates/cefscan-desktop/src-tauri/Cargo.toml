@@ -22,6 +22,12 @@ serde = { workspace = true }
 [target.'cfg(target_os = "windows")'.dependencies]
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_System_Com",
     "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",
 ] }
+# 图标只在 Windows 上提取（icon.rs），所以这两个依赖也只在 Windows 下引入，
+# 免得给 Linux/macOS 构建平白多编两个 crate。
+png = "0.18"
+base64 = "0.22"

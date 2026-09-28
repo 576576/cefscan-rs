@@ -10,6 +10,8 @@ use cefscan_core::{AppInfo, Backend, ScanOptions, ScanStats};
 use serde::{Deserialize, Serialize};
 use tauri::ipc::Channel;
 
+mod icon;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ScanRequest {
@@ -23,15 +25,21 @@ pub struct ScanRequest {
 pub struct AppRow {
     pub path: String,
     pub root: String,
+    /// 从路径启发式推导出的可读应用名（`cefscan_core::display_name`）。
+    pub name: String,
     pub kind: String,
     pub size: u64,
     pub running: bool,
     pub evidence: Option<String>,
+    /// `data:image/png;base64,...`，取不到图标时为 `null`。
+    pub icon: Option<String>,
 }
 
 impl From<AppInfo> for AppRow {
     fn from(app: AppInfo) -> Self {
         Self {
+            name: cefscan_core::display_name(&app.path),
+            icon: icon::data_url(&app.path),
             path: app.path.to_string_lossy().into_owned(),
             root: app.root.to_string_lossy().into_owned(),
             kind: app.kind.label().to_owned(),

@@ -67,7 +67,15 @@ html, body {
 
 .table-wrap { flex: 1; overflow: auto; }
 
-table { width: 100%; border-collapse: collapse; }
+table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+
+/* 固定列宽：路径列不设宽度，吃掉剩余空间。这样折叠后的「头…尾」不会被
+   CSS 的 text-overflow 二次截断，尾部一定看得见。 */
+.col-icon { width: 34px; }
+.col-name { width: 22%; }
+.col-kind { width: 108px; }
+.col-size { width: 92px; }
+.col-running { width: 76px; }
 
 th {
   position: sticky;
@@ -78,6 +86,7 @@ th {
   border-bottom: 1px solid var(--border);
   cursor: pointer;
   user-select: none;
+  white-space: nowrap;
 }
 
 th:hover { color: #fff; }
@@ -88,7 +97,40 @@ tbody tr:hover { background: #23262e; cursor: pointer; }
 
 .num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
 
-.path { max-width: 620px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 图标列：不给它排序，只占一个固定窄列（宽度由 colgroup 定）。 */
+td.icon { padding-right: 0; }
+
+td.icon img { display: block; width: 18px; height: 18px; }
+
+td.name {
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.path { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.path-folded { color: var(--muted); }
+
+/* 展开后路径要能换行显示完整内容，定位按钮另起一行。 */
+tr.expanded td.path { overflow: visible; white-space: normal; word-break: break-all; }
+
+.path-full { display: block; }
+
+.reveal {
+  display: block;
+  margin-top: 4px;
+  padding: 2px 8px;
+  font-size: 12px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: #2a2e36;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.reveal:hover { background: #343945; color: #fff; }
 
 .tag {
   display: inline-block;

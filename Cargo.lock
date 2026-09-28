@@ -318,7 +318,9 @@ dependencies = [
 name = "cefscanw"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "cefscan-core",
+ "png 0.18.1",
  "serde",
  "tauri",
  "tauri-build",

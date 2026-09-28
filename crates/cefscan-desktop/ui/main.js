@@ -4,6 +4,9 @@
 
 const MAX_ROWS = 500;
 
+/** 折叠路径时前面保留的目录层数（盘符 / UNC 根不计入）。 */
+const PATH_HEAD_SEGMENTS = 3;
+
 const KIND_COLORS = {
   electron: '#7dc4e4',
   edge: '#5aa9e6',
@@ -33,6 +36,9 @@ let sortAscending = false;
 let renderQueued = false;
 let scanning = false;
 
+/** 已展开路径的行。用 Set 而不是给 <tr> 挂 class，是因为流式扫描会整表重绘。 */
+const expandedPaths = new Set();
+
 /** 1024 进制的人类可读体积，与 CLI 的 human_size 保持一致。 */
 function humanSize(bytes) {
   const units = ['B', 'KiB', 'MiB', 'GiB', 'TiB', 'PiB'];
@@ -53,6 +59,46 @@ function escapeHtml(text) {
     .replace(/"/g, '&quot;');
 }
 
+/**
+ * 折叠路径：前面只留「根 + 3 层目录」，中间省略号，后面只留文件名。
+ *
+ *   C:\Users\16695\AppData\Local\Programs\WorkBuddy\WorkBuddy.exe
+ *   → C:\Users\16695\AppData\…\WorkBuddy.exe
+ *
+ * 按分隔符切段而不是按字符数切，这样尾部的文件名一定完整。
+ * 盘符（`C:`）和 UNC 的空段都算"根"，不占目录层数。
+ */
+function foldPath(path) {
+  const separator = path.includes('\\') ? '\\' : '/';
+  const segments = path.split(separator);
+  const head = segments.slice(0, PATH_HEAD_SEGMENTS + 1).join(separator);
+  const tail = segments[segments.length - 1];
+  const folded = `${head}${separator}…${separator}${tail}`;
+  // 短路径折完反而更长，那就别折。
+  return folded.length < path.length ? folded : path;
+}
+
+/** 路径列的 HTML：折叠时只有一行摘要，展开时是完整路径 + 定位按钮。 */
+function pathCellHtml(path, expanded) {
+  if (!expanded) {
+    return `<span class="path-folded" title="${escapeHtml(path)}">${escapeHtml(foldPath(path))}</span>`;
+  }
+  return (
+    `<span class="path-full">${escapeHtml(path)}</span>` +
+    `<button type="button" class="reveal" data-reveal="${escapeHtml(path)}">在资源管理器中显示</button>`
+  );
+}
+
+/** 只重画一行的路径单元格——展开/收起不该触发整表重绘。 */
+function paintPathCell(row) {
+  const cell = row.querySelector('td.path');
+  if (!cell) return;
+  const path = row.dataset.path;
+  const expanded = expandedPaths.has(path);
+  row.classList.toggle('expanded', expanded);
+  cell.innerHTML = pathCellHtml(path, expanded);
+}
+
 function sortRows() {
   rows.sort((left, right) => {
     let order;
@@ -65,6 +111,9 @@ function sortRows() {
         break;
       case 'kind':
         order = left.kind.localeCompare(right.kind);
+        break;
+      case 'name':
+        order = left.name.localeCompare(right.name);
         break;
       default:
         order = left.path.localeCompare(right.path);
@@ -85,18 +134,22 @@ function render() {
   for (const row of visible) {
     const color = KIND_COLORS[row.kind] || KIND_COLORS.unknown;
     const detail = row.evidence ? `${row.kind} · ${row.evidence}` : row.kind;
+    const expanded = expandedPaths.has(row.path);
+    const icon = row.icon ? `<img src="${row.icon}" alt="" width="18" height="18" />` : '';
     parts.push(
-      `<tr data-path="${escapeHtml(row.path)}">
+      `<tr data-path="${escapeHtml(row.path)}"${expanded ? ' class="expanded"' : ''}>
+        <td class="icon">${icon}</td>
+        <td class="name" title="${escapeHtml(row.name)}">${escapeHtml(row.name)}</td>
         <td><span class="tag" style="background:${color}" title="${escapeHtml(detail)}">${escapeHtml(row.kind)}</span></td>
         <td class="num">${humanSize(row.size)}</td>
         <td class="num">${row.running ? '<span class="dot"></span>运行中' : ''}</td>
-        <td class="path" title="${escapeHtml(row.path)}">${escapeHtml(row.path)}</td>
+        <td class="path">${pathCellHtml(row.path, expanded)}</td>
       </tr>`
     );
   }
   if (rows.length > visible.length) {
     parts.push(
-      `<tr><td colspan="4" class="more">仅显示前 ${visible.length} 条，共 ${rows.length} 条</td></tr>`
+      `<tr><td colspan="6" class="more">仅显示前 ${visible.length} 条，共 ${rows.length} 条</td></tr>`
     );
   }
   body.innerHTML = parts.join('');
@@ -119,6 +172,7 @@ async function runScan() {
   if (scanning) return;
   setScanning(true);
   rows = [];
+  expandedPaths.clear();
   render();
   summary.hidden = true;
   status.textContent = '扫描中…';
@@ -179,13 +233,26 @@ function bootstrap() {
   });
 
   body.addEventListener('click', (event) => {
-    const row = event.target.closest('tr');
-    const path = row && row.getAttribute('data-path');
-    if (path) {
-      invoke('reveal', { path }).catch((error) => {
+    // 展开后才出现的"在资源管理器中显示"按钮：拦下来，别让它顺带收起行。
+    const reveal = event.target.closest('[data-reveal]');
+    if (reveal) {
+      event.stopPropagation();
+      invoke('reveal', { path: reveal.dataset.reveal }).catch((error) => {
         status.textContent = `无法定位：${String(error)}`;
       });
+      return;
     }
+
+    // 点整行 = 展开/收起该行的完整路径。
+    const row = event.target.closest('tr');
+    if (!row || !row.dataset.path) return;
+    const path = row.dataset.path;
+    if (expandedPaths.has(path)) {
+      expandedPaths.delete(path);
+    } else {
+      expandedPaths.add(path);
+    }
+    paintPathCell(row);
   });
 
   for (const header of document.querySelectorAll('th[data-sort]')) {

@@ -18,8 +18,8 @@
         />
         <select id="backend-select">
           <option value="auto">后端：自动</option>
-          <option value="filesystem">后端：遍历</option>
-          <option value="index">后端：索引</option>
+          <option value="filesystem">后端：遍历（cefscan）</option>
+          <option value="index">后端：索引（自动）</option>
         </select>
         <button id="scan-button" type="button">开始扫描</button>
         <span id="status" class="status">就绪</span>
@@ -35,8 +35,18 @@
 
       <main class="table-wrap">
         <table id="results">
+          <colgroup>
+            <col class="col-icon" />
+            <col class="col-name" />
+            <col class="col-kind" />
+            <col class="col-size" />
+            <col class="col-running" />
+            <col class="col-path" />
+          </colgroup>
           <thead>
             <tr>
+              <th class="icon-col" aria-label="图标"></th>
+              <th data-sort="name">名称</th>
               <th data-sort="kind">类型</th>
               <th data-sort="size">占用</th>
               <th data-sort="running">运行</th>
