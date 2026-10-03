@@ -1,0 +1,93 @@
+name: Lint
+
+# 质量门禁（图标 / 前端 / fmt / clippy / test）：只由 release.yml 调起，不跟 push/PR；设计与背景见 docs/init-cefscan-rs.md 的「CI」。
+on:
+  workflow_call:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  frontend:
+    name: 图标与前端
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      # 纯 Python、秒级出结果。bundle.icon 的约束只在 Unix 目标上生效，Linux 会在 generate_context! 里 panic（那次要编译 5 分钟才炸）。
+      - name: 校验图标文件
+        run: python3 tools/check_icons.py
+      # ui/main.js 是 cargo test 唯一覆盖不到的一段，改用 DOM 桩断言调用次数与时序；纯 Node、半秒跑完。
+      - name: 前端逻辑
+        run: node tools/ui_harness.js
+
+  fmt:
+    name: rustfmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: 安装 Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: 检查格式
+        run: cargo fmt --all --check
+
+  clippy:
+    name: clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: 安装 Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - name: 缓存 cargo 与 target
+        uses: Swatinem/rust-cache@v2
+      # cefscanw 是 Tauri 2 应用，Linux 上即使只跑 check 也要装 webkit2gtk 等开发包；没用 tray-icon 特性，不需要 libappindicator3-dev。
+      - name: 安装 Linux 系统依赖
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            librsvg2-dev
+      - name: 静态检查
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      # feature 组合矩阵：确认 serde / everything 都能单独关掉，否则这两个 feature 会悄悄退化成"其实必须开"。
+      - name: feature 组合
+        run: |
+          set -euxo pipefail
+          cargo check -p cefscan-core --locked --no-default-features
+          cargo check -p cefscan-core --locked --no-default-features --features serde
+          cargo check -p cefscan-core --locked --no-default-features --features everything
+          cargo check -p cefscan-core --locked --no-default-features --features serde,everything
+
+  test:
+    name: test (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: windows-x86_64
+            os: windows-latest
+          - name: linux-x86_64
+            os: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: 安装 Rust
+        uses: dtolnay/rust-toolchain@stable
+      - name: 缓存 cargo 与 target
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: test-${{ matrix.name }}
+      - name: 安装 Linux 系统依赖
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            librsvg2-dev
+      # --profile ci 让依赖不优化、不带 debuginfo（编译时间砍六成，测试本身只跑 1 秒多）；--no-fail-fast 一次看全所有失败。
+      - name: 测试
+        run: cargo test --workspace --locked --no-fail-fast --profile ci

@@ -1,0 +1,92 @@
+name: Build
+
+# 可复用构建工作流：只负责把包做出来，不碰发布。版本号由 release.yml 的 prep job 推导一次后传进来，别在这里再推导一遍。
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: 版本名（形如 0.{提交数}），同时作为编译期注入的版本号
+        required: true
+        type: string
+      channel:
+        description: alpha / beta / release，只用于产物标注
+        required: true
+        type: string
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: build (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: windows-x86_64
+            os: windows-latest
+            exe: ".exe"
+          - name: linux-x86_64
+            os: ubuntu-latest
+            exe: ""
+    steps:
+      - uses: actions/checkout@v7
+      - name: 安装 Rust
+        uses: dtolnay/rust-toolchain@stable
+      - name: 缓存 cargo 与 target
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: build-${{ matrix.name }}
+      - name: 安装 Linux 系统依赖
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            librsvg2-dev \
+            zip
+      # CEFSCAN_BUILD_VERSION 是编译期注入的版本号（cli.rs 用 option_env! 读）；不设时回落到 Cargo.toml 的版本，本地构建不受影响。
+      - name: 构建 release
+        env:
+          CEFSCAN_BUILD_VERSION: ${{ inputs.version }}
+        run: cargo build --release --locked --workspace
+      # 先收进一个以"版本+平台"命名的目录再打包，解开就是一个自包含目录（两个 exe 与 README/LICENSE 同级）。
+      - name: 收集产物
+        shell: bash
+        run: |
+          set -euo pipefail
+          NAME="cefscan-${{ inputs.version }}-${{ matrix.name }}"
+          mkdir -p "dist/$NAME"
+          cp "target/release/cefscan${{ matrix.exe }}" "dist/$NAME/"
+          cp "target/release/cefscanw${{ matrix.exe }}" "dist/$NAME/"
+          cp README.md LICENSE "dist/$NAME/"
+      # 产物能跑起来才算构建成功（cefscanw 是 GUI，不在 CI 里启动）；顺带核对注入的版本号真的生效了。
+      - name: 冒烟检查
+        shell: bash
+        run: |
+          set -euo pipefail
+          BIN="dist/cefscan-${{ inputs.version }}-${{ matrix.name }}/cefscan${{ matrix.exe }}"
+          "$BIN" --version
+          "$BIN" --help > /dev/null
+          "$BIN" --version | grep -qF "${{ inputs.version }}"
+      # Windows 侧 Compress-Archive 会把目标目录本身收进归档，正是想要的顶层目录；两个平台都出 zip，用户侧一致。
+      - name: 打包（Windows）
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Compress-Archive -Path "dist/cefscan-${{ inputs.version }}-${{ matrix.name }}" -DestinationPath "dist/cefscan-${{ inputs.version }}-${{ matrix.name }}.zip"
+      # Linux 侧的 zip 已随系统依赖装好；-q 少输出、-r 递归。
+      - name: 打包（Linux）
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          NAME="cefscan-${{ inputs.version }}-${{ matrix.name }}"
+          (cd dist && zip -qr "$NAME.zip" "$NAME")
+      - name: 上传产物
+        uses: actions/upload-artifact@v7
+        with:
+          name: cefscan-${{ inputs.version }}-${{ matrix.name }}
+          path: dist/cefscan-${{ inputs.version }}-${{ matrix.name }}.zip
+          if-no-files-found: error
+          retention-days: 30
