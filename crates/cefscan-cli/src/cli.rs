@@ -12,7 +12,8 @@ pub enum BackendArg {
     /// 只用索引后端
     Index,
     /// 只用 cefscan 遍历后端
-    Filesystem,
+    #[value(alias = "filesystem")]
+    Cefscan,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -102,7 +103,7 @@ impl Cli {
             backend: match self.backend {
                 BackendArg::Auto => Backend::Auto,
                 BackendArg::Index => Backend::Index,
-                BackendArg::Filesystem => Backend::Filesystem,
+                BackendArg::Cefscan => Backend::Filesystem,
             },
             walk_threads: self.threads,
             scan_threads: self.threads,

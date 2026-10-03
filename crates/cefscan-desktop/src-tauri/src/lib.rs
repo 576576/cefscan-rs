@@ -143,7 +143,8 @@ fn reveal(path: String) -> Result<(), String> {
 fn to_options(request: &ScanRequest) -> ScanOptions {
     let backend = match request.backend.as_deref() {
         Some("index") => Backend::Index,
-        Some("filesystem") => Backend::Filesystem,
+        // `filesystem` 是改名前的旧值，留作兼容。
+        Some("cefscan" | "filesystem") => Backend::Filesystem,
         _ => Backend::Auto,
     };
     let threads = request.threads.unwrap_or(0);
