@@ -12,9 +12,12 @@
 截图命令（这几个开关都不是可选的）：
 
     chrome --headless --disable-gpu --hide-scrollbars --force-prefers-reduced-motion \\
-           --virtual-time-budget=9000 --window-size=1280,800 \\
+           --virtual-time-budget=30000 --window-size=1280,800 \\
            --screenshot=绝对路径.png --dump-dom file:///绝对路径/index.html
 
+- `--virtual-time-budget` 必须**大于** SETTLE_MS，也要大于揭示队列的总时长
+  （一拍最多 `REVEAL_MAX_PER_TICK` 张，条数越多越久）。给小了会截到"还在往外浮"
+  的中间态——表现是 title 还停在 `cefscanw`，或者卡片只出来一小半。
 - `--force-prefers-reduced-motion`：否则卡片墙的"平滑滚动"在虚拟时间下走不完，
   截图会停在未滚动的位置。
 - `--screenshot` 的路径必须是**绝对 Windows 路径**，相对路径会报"系统找不到指定的路径"。
@@ -26,9 +29,10 @@
 是 705，`ResizeObserver` 也不触发）——那是合成层的重排。后果是截图那一刻最大滚动量
 变小、`scrollTop` 被夹回，卡片墙顶部会切掉小半行（切掉的正是 800-705 = 95 px）。
 **这是截图工具的假象，不是前端 bug**：滚到顶（scrollTop=0，夹不动）再量，行顶边
-精确落在 `padTop + k*行距` = 0 / 130 / 260 / 390 / 520 / 650（顶部区域已经挪到
-`#cards` 外面，所以这里的 padTop 是 0）。所以经典模式截图前会先滚到顶，让画面可确定；
-"跟最新一行"的几何正确性看 title 里的 `对齐残差`（0 表示视口顶部正好落在行顶边上）。
+精确落在 `padTop + k*行距` = 0 / 106 / 212 / 318 / 424 / 530（行距 = `--card-h` 95 +
+`--card-gap` 11；顶部区域已经挪到 `#cards` 外面，所以这里的 padTop 是 0）。所以经典
+模式截图前会先滚到顶，让画面可确定；"跟最新一行"的几何正确性看 title 里的 `对齐残差`
+（0 表示视口顶部正好落在行顶边上）。
 """
 import pathlib
 import shutil
@@ -55,9 +59,10 @@ DEMO = [
      r"C:\Program Files (x86)\Tencent\WeMeet\wemeetapp.exe"),
 ]
 
-# 截图脚本等多久再去读状态：必须长于揭示队列的总时长（见 main.js 的
-# REVEAL_BUDGET_MS），否则截到的是"还在往外浮"的中间态。
-SETTLE_MS = 6000
+# 等状态落定的**上限**（毫秒）。注意它不是定长 sleep：driver 会轮询刷新胶囊是否
+# 恢复可用（`scanning` 一挂上它就 disabled），扫完就走。揭示节奏是"一拍最多几张"，
+# 总时长跟条数成正比，写死一个 sleep 迟早不够——这个值只要够大就行。
+SETTLE_MS = 20000
 
 
 def js(value: object) -> str:
@@ -178,12 +183,19 @@ def driver(mode: str) -> str:
             + ' 对齐残差=' + align;
         }};
 
-        setTimeout(() => {{
+        // 扫完的标志是刷新胶囊恢复可用（`scanning` 一挂上它就 disabled）。轮询比定长
+        // sleep 稳：揭示节奏是"一拍最多 REVEAL_MAX_PER_TICK 张"，总时长跟条数成正比，
+        // 写死一个等待时长要么白等、要么截到"还在往外浮"的中间态。
+        const deadline = Date.now() + {SETTLE_MS};
+        const settle = () => {{
+          const busy = document.getElementById('classic-refresh').disabled;
+          if (busy && Date.now() < deadline) {{ setTimeout(settle, 60); return; }}
           report();
           // 截图前滚到顶：scrollTop=0 不会被无头截图的视口重排夹取，画面才可确定。
           // （滚到底的话截出来会切掉小半行，那是截图工具的假象，见模块文档。）
           if ({js(mode)} === 'classic') document.getElementById('cards').scrollTop = 0;
-        }}, {SETTLE_MS});
+        }};
+        setTimeout(settle, 0);
 
         // resize 之后补报一次，用来确认前端那条"盒子变了就重新对齐"的分支有没有生效。
         window.addEventListener('resize', () => setTimeout(report, 0));

@@ -79,8 +79,8 @@ const el = (id) => {
  * 行距固定、每行固定几列），给出**确定的输入**，测试才好断言它算出来的输出。
  */
 const CARD_LAYOUT = {
-  cardH: 116, // 与 styles.css 的 --card-h 一致
-  gap: 14, // 与 --card-gap 一致
+  cardH: 95, // 与 styles.css 的 --card-h 一致
+  gap: 11, // 与 --card-gap 一致
   // 顶部区域（图标胶囊 + 条数）已经挪到 #cards **外面**了，所以卡片墙自己的
   // 上内边距是 0。公式里仍然带着它，见 main.js 的 followNewest。
   padTop: 0,
@@ -91,7 +91,7 @@ const CARD_LAYOUT = {
 
 const cardsEl = (() => {
   const node = baseEl('cards');
-  node.scrollTop = 0;
+  let scrollTop = 0;
   node.scrollToCalls = [];
   const cardCount = () => (node.innerHTML.match(/<article class="card/g) || []).length;
   const padBottom = () => {
@@ -106,6 +106,20 @@ const cardsEl = (() => {
     },
   });
   Object.defineProperty(node, 'clientHeight', { get: () => CARD_LAYOUT.clientHeight });
+  // 写 scrollTop 要照浏览器的语义来：夹到 [0, 最大滚动量]，并**异步**派发 scroll 事件
+  // （同步派发会在 followNewest / 滚动动画内部重入）。
+  // 前端自己按帧推滚动（scrollCardsTo），所以这个 setter 是那套动画的唯一出口——
+  // 桩里要是把 scrollTop 当普通字段，动画跑得再欢也观察不到。
+  Object.defineProperty(node, 'scrollTop', {
+    get: () => scrollTop,
+    set: (value) => {
+      const max = Math.max(0, node.scrollHeight - node.clientHeight);
+      const next = Math.max(0, Math.min(value, max));
+      if (next === scrollTop) return;
+      scrollTop = next;
+      if (node.handlers.scroll) rafQueue.push(node.handlers.scroll);
+    },
+  });
   node.querySelectorAll = (selector) => {
     if (selector !== '.card') return [];
     return Array.from({ length: cardCount() }, (_, index) => ({
@@ -115,14 +129,10 @@ const cardsEl = (() => {
         Math.floor(index / CARD_LAYOUT.columns) * (CARD_LAYOUT.cardH + CARD_LAYOUT.gap),
     }));
   };
+  // 前端已经不用 scrollTo 了（自己按帧推），留着只为兼容可能的旧调用。
   node.scrollTo = (options) => {
     node.scrollToCalls.push(options);
-    // 浏览器会把目标夹到 [0, 最大滚动量]。
-    const max = Math.max(0, node.scrollHeight - node.clientHeight);
-    node.scrollTop = Math.max(0, Math.min(options.top, max));
-    // 真实浏览器里 scroll 事件是异步的，所以排进 rAF 队列，由 flush() 触发——
-    // 同步触发会在 followNewest 内部重入。
-    if (node.handlers.scroll) rafQueue.push(node.handlers.scroll);
+    node.scrollTop = options.top;
   };
   return node;
 })();
@@ -229,6 +239,60 @@ el('mode-classic').value = (modeValue('classic') || [])[1] || '';
 el('mode-tool').value = (modeValue('tool') || [])[1] || '';
 
 const source = fs.readFileSync(path.join(UI, 'main.js'), 'utf8');
+
+/**
+ * 去掉 JS 源码里的注释，专供**负面断言**（"代码里不该再出现 X"）使用。
+ *
+ * 正面断言（"应该有 Y"）在原始源码上匹配没问题；负面断言不行——注释里越是认真
+ * 解释"为什么不用 X"，原始源码里就越是留着 X 的字样，断言反而被自己的注释绊倒。
+ * 所以负面断言一律对剥离注释后的文本做，注释怎么写都不影响。
+ */
+function stripComments(text) {
+  let out = '';
+  let i = 0;
+  const n = text.length;
+  while (i < n) {
+    const ch = text[i];
+    const next = text[i + 1];
+    if (ch === '/' && next === '*') {
+      i += 2;
+      while (i < n && !(text[i] === '*' && text[i + 1] === '/')) i += 1;
+      i += 2;
+      continue;
+    }
+    if (ch === '/' && next === '/') {
+      i += 2;
+      while (i < n && text[i] !== '\n') i += 1;
+      continue;
+    }
+    if (ch === '"' || ch === "'" || ch === '`') {
+      const quote = ch;
+      out += ch;
+      i += 1;
+      while (i < n) {
+        if (text[i] === '\\') {
+          out += text[i] + (text[i + 1] || '');
+          i += 2;
+          continue;
+        }
+        out += text[i];
+        if (text[i] === quote) {
+          i += 1;
+          break;
+        }
+        i += 1;
+      }
+      continue;
+    }
+    out += ch;
+    i += 1;
+  }
+  return out;
+}
+
+// 只给负面断言用；正面断言仍用带注释的 source。
+const code = stripComments(source);
+
 // eslint-disable-next-line no-new-func
 new Function('window', 'document', 'requestAnimationFrame', source)(
   global.window,
@@ -236,11 +300,30 @@ new Function('window', 'document', 'requestAnimationFrame', source)(
   global.requestAnimationFrame
 );
 
+/**
+ * 排空**本次**入队的 rAF 回调。
+ *
+ * 不能写成 `while (rafQueue.length) shift()()`：前端自己驱动的滚动动画每跑一帧就会
+ * 再入队一个，那样这里会死循环。所以先取一份快照，续帧的回调留到下一次 flush。
+ * 回调带一个递增的时间戳——滚动动画按帧间隔算位移，没有时间戳就只能按兜底的 16ms 走。
+ */
+let rafClock = 0;
 const flush = async () => {
   for (let i = 0; i < 10; i += 1) await Promise.resolve();
-  while (rafQueue.length) rafQueue.shift()();
+  for (const fn of rafQueue.splice(0, rafQueue.length)) {
+    rafClock += 16;
+    fn(rafClock);
+  }
 };
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** 把自己驱动的滚动动画推到静止（每帧 16ms，上限给得足够宽）。 */
+const settleScroll = async (maxFrames = 4000) => {
+  for (let i = 0; i < maxFrames; i += 1) {
+    if (!rafQueue.length) return;
+    await flush();
+  }
+};
 
 /**
  * 等到条件成立（或超时）。
@@ -277,8 +360,6 @@ const enteringRows = () =>
 /** 卡片墙里画出来的卡片数 / 带入场动画的卡片数。 */
 const paintedCards = () => (cardsEl.innerHTML.match(/<article class="card/g) || []).length;
 const enteringCards = () => (cardsEl.innerHTML.match(/<article class="card enter/g) || []).length;
-const lastScrollTop = () =>
-  cardsEl.scrollToCalls.length ? cardsEl.scrollToCalls[cardsEl.scrollToCalls.length - 1].top : null;
 
 const item = (name, size) => ({
   type: 'item',
@@ -309,7 +390,10 @@ const PITCH = CARD_LAYOUT.cardH + CARD_LAYOUT.gap;
   // ---- 静态检查：初始选择页的结构 ----
   expect('index.html 有初始选择页', /id="picker"/.test(html), true);
   expect('初始页恰好两个模式选项', (html.match(/<input[^>]*name="mode"/g) || []).length, 2);
-  expectTrue('初始页有"开始扫描"按钮', /id="start-button"[^>]*>\s*开始扫描/.test(html));
+  // 按钮写"进入"而不是"开始扫描"：它只负责把人送进选中的视图，进去之后扫不扫得看
+  // 情况（已有结果就复用、工具模式只切视图不扫）。文案写"开始扫描"就是在骗人。
+  expectTrue('初始页按钮写"进入"', /id="start-button"[^>]*>\s*进入\s*</.test(html));
+  expectTrue('"进入"按钮不会在 setScanning 里被改成"开始扫描"', !/startButton\.textContent/.test(source));
   expectTrue('经典模式默认选中', el('mode-classic').checked);
   expect('工具模式默认不选中', el('mode-tool').checked, false);
   expect('两个 radio 的 value 就是视图名', `${el('mode-classic').value}/${el('mode-tool').value}`, 'classic/tool');
@@ -378,11 +462,47 @@ const PITCH = CARD_LAYOUT.cardH + CARD_LAYOUT.gap;
     '卡片背景是变量且为全透明',
     /--card-bg:\s*transparent/.test(css) && /\.card\s*\{[^}]*background:\s*var\(--card-bg\)/.test(css)
   );
-  // 名称下部被切是因为卡片定高 116px 装不下内容，所以内边距和行距必须收紧。
-  expectTrue('卡片内边距收到 10px', /\.card\s*\{[^}]*padding:\s*10px/.test(css));
-  expectTrue('卡片行距收到 6px', /\.card\s*\{[^}]*gap:\s*6px/.test(css));
+  // 名称下部被切是因为卡片定高装不下内容，所以内边距和行距必须收紧。
+  expectTrue('卡片内边距收到 8px', /\.card\s*\{[^}]*padding:\s*8px/.test(css));
+  expectTrue('卡片行距收到 4px', /\.card\s*\{[^}]*gap:\s*4px/.test(css));
   expectTrue('应用名行高写死（不继承 1.5）', /\.card-name\s*\{[^}]*line-height:\s*[\d.]+/.test(css));
+  expectTrue('应用名字号也写死（不继承 body 的 14px）', /\.card-name\s*\{[^}]*font-size:\s*[\d.]+px/.test(css));
   expect('已无"还没有结果"空态', /cards-empty|还没有结果/.test(css + source), false);
+
+  // 密度：卡片墙一屏能放几张，跟 (card-min+gap) × (card-h+gap) 成反比。这三个值
+  // 是一组，单独改一个会把卡片比例搞歪（或让内容装不下、又切掉名称的下伸笔画）。
+  // 这里只断言"三者同步缩小"——真正的密度由截图那一层看。
+  const cssVar = (name) => Number.parseFloat(new RegExp(`--${name}:\\s*([\\d.]+)px`).exec(css)[1]);
+  const cardMin = cssVar('card-min');
+  const cardH = cssVar('card-h');
+  const cardGap = cssVar('card-gap');
+  expectTrue(`卡片几何缩小过（${cardMin}/${cardH}/${cardGap}）`, cardMin < 168 && cardH < 116 && cardGap < 14);
+  expectTrue(
+    '卡片几何仍是一组（宽高比与间距比都没走样）',
+    Math.abs(cardMin / cardH - 168 / 116) < 0.02 && Math.abs(cardGap / cardH - 14 / 116) < 0.02
+  );
+  // 图标槽必须跟 .card-icon 的尺寸一致，否则卡片高度会参差不齐。
+  const iconPx = Number.parseFloat(/\.card-icon\s*\{[^}]*width:\s*([\d.]+)px/.exec(css)[1]);
+  expectTrue('图标槽跟 cardIconHtml 的尺寸一致', new RegExp(`width="${iconPx}" height="${iconPx}"`).test(source));
+  expectTrue('图标槽缩到了 32px', iconPx === 32);
+
+  // 揭示与滚动的**速度上限**：用户明确要"最大出现速度"，不然结果一多就是"唰"地
+  // 一下全出来，没有仪式感。上限在代码里，这里钉住它别被后人顺手删掉。
+  expectTrue('揭示速度有硬上限', /REVEAL_MAX_PER_TICK\s*=\s*\d+/.test(source));
+  expectTrue('revealTick 真的用了那个上限', /Math\.min\(byBudget,\s*REVEAL_MAX_PER_TICK\)/.test(source));
+  // 滚动不能用浏览器自带的平滑滚动：它的速度没法调，而且是异步的（scrollTop 不会
+  // 立刻变），按位置限速根本配合不了——实测会把墙卡在顶部一动不动。
+  expectTrue('滚动速度上限是一个明确的常量', /SCROLL_MAX_PX_PER_SEC\s*=\s*\d+/.test(source));
+  expectTrue('滚动是自己按帧推的（不再用 scrollTo 的平滑滚动）', /function scrollFrame/.test(source));
+  expect('不再依赖浏览器平滑滚动', /behavior:\s*['"]smooth['"]/.test(code), false);
+  expectTrue('followNewest 走自己的滚动函数', /scrollCardsTo\(target\)/.test(source));
+  // lastScrollTop 只能由 scroll 监听写：滚动动画写的是 scrollTop 本身，它要是也去写
+  // lastScrollTop，事件里的旧值和动画写的新值就会交错，每一帧向下滚都被误判成
+  // "用户往上滚"，跟随当场永久停摆。
+  expectTrue(
+    'lastScrollTop 只由 scroll 监听写（滚动动画不碰它）',
+    !/lastScrollTop\s*=/.test(source.slice(source.indexOf('function scrollFrame'), source.indexOf('function scrollCardsTo')))
+  );
 
   const bgUrl = /url\("([^"]+)"\)/.exec(css);
   expectTrue('背景图在 frontendDist 里存在', bgUrl && fs.existsSync(path.join(UI, bgUrl[1])));
@@ -412,6 +532,10 @@ const PITCH = CARD_LAYOUT.cardH + CARD_LAYOUT.gap;
   expect('只有新卡片带入场动画', enteringCards(), 1);
   expect('队列没清空前不显示汇总', el('summary').hidden, true);
   expect('经典模式不探测后端（界面上没有 chip）', invokeLog.includes('detect_backend'), false);
+  // 选择页那个按钮只是"进入"，扫描中也不该禁用——不然扫到一半从视图里点"返回"，
+  // 就再也进不去了。工具模式那个按钮才该在扫描时禁用（防止重复开扫）。
+  expect('扫描中"进入"按钮仍可用', startButton.disabled, false);
+  expect('扫描中工具模式的"开始扫描"被禁用', scanButton.disabled, true);
 
   await wait(300);
   const mid = paintedCards();
@@ -424,7 +548,8 @@ const PITCH = CARD_LAYOUT.cardH + CARD_LAYOUT.gap;
   expect('工具模式的状态行照旧带合计', el('status').textContent, '完成，共 5 个 · 合计 1 B');
   // 经典模式的结果显示是顶部那行条数，格式跟工具模式的状态行不一样。
   expect('经典模式条数文案', el('classic-count').textContent, '您的电脑里有 5 个 Chromium');
-  expect('按钮恢复', startButton.disabled, false);
+  expect('扫描结束后"进入"按钮仍可用', startButton.disabled, false);
+  expect('扫描结束后"开始扫描"恢复', scanButton.disabled, false);
   expect('刷新胶囊恢复可用', el('classic-refresh').disabled, false);
 
   // 点表头排序会整墙重绘——已经在屏幕上的卡片不该重放一次入场动画。
@@ -515,57 +640,86 @@ const PITCH = CARD_LAYOUT.cardH + CARD_LAYOUT.gap;
   expect('工具模式下再扫不额外探测', invokeLog.filter((c) => c === 'detect_backend').length, 0);
 
   // ---- 场景 7：卡片墙按整行滚动 ----
+  // 卡片缩小后一屏装得下更多行，所以要 42 张（7 行）才会溢出——6 行（36 张）
+  // 只有 625px 高，装进 705px 的视口里根本不用滚。
   el('mode-classic').checked = true;
   el('mode-tool').checked = false;
   scripted = [
     { type: 'started', backend: 'cefscan' },
-    ...Array.from({ length: 36 }, (_, i) => item(`App${i}`, 100000 - i * 100)),
-    done(36),
+    ...Array.from({ length: 42 }, (_, i) => item(`App${i}`, 100000 - i * 100)),
+    done(42),
   ];
   cardsEl.scrollToCalls = [];
   cardsEl.scrollTop = 0;
   cardsEl.style.paddingBottom = '';
   startButton.handlers.click();
   await flush();
-  // 等揭示队列放完。总时长由 REVEAL_BUDGET_MS 兜底（36 条约 4 秒），跟条数只有
-  // 大致关系，所以轮询而不是定长 sleep。
+  // 等揭示队列放完。42 条按"一拍最多 3 张"的上限走，实际是一拍 1 张（预算算出来
+  // 就是 1），约 6.3 秒，所以轮询而不是定长 sleep。
+  // 判据用 `scanButton`：选择页那个"进入"按钮扫描中也不禁用，拿它当"扫完了"的标志
+  // 会早退——揭示队列排空和 applyDone 之间还差一拍（150ms），那时 scanning 还挂着。
   const drained = await waitUntil(
-    () => paintedCards() === 36 && !startButton.disabled,
-    9000
+    () => paintedCards() === 42 && !scanButton.disabled,
+    12000
   );
-  expectTrue('揭示队列放完且收尾（36 张）', drained);
+  expectTrue('揭示队列放完且收尾（42 张）', drained);
 
-  // 36 张 / 每行 6 列 = 6 行。顶部区域（胶囊 + 条数）在 #cards 外面，所以 padTop = 0。
-  //   自然溢出 = 0 + (6*116 + 5*14) + 18 - 705 = 79
-  //   最后一行底边 = 0 + 5*130 + 116 = 766，要让它完整可见：minTop = 766 - 705 = 61
-  //   对齐到行顶边：0 + ceil((61-0)/130)*130 = 130
-  //   底部内边距补到够滚：18 + (130 - 79) = 69
-  expect('卡片全画出来', paintedCards(), 36);
-  expect('自动跟随的目标对齐到整行', lastScrollTop(), 130);
-  expect('底部内边距补成整行', cardsEl.style.paddingBottom, '69px');
-  expect('确实滚到了目标位置（没有被夹）', cardsEl.scrollTop, 130);
+  // 42 张 / 每行 6 列 = 7 行。顶部区域（胶囊 + 条数）在 #cards 外面，所以 padTop = 0。
+  //   行距 = 95 + 11 = 106
+  //   自然溢出 = 0 + (7*95 + 6*11) + 18 - 705 = 731 + 18 - 705 = 44
+  //   最后一行底边 = 0 + 6*106 + 95 = 731，要让它完整可见：minTop = 731 - 705 = 26
+  //   对齐到行顶边：0 + ceil((26-0)/106)*106 = 106
+  //   底部内边距补到够滚：18 + (106 - 44) = 80
+  expect('卡片全画出来', paintedCards(), 42);
+  expect('底部内边距补成整行', cardsEl.style.paddingBottom, '80px');
+
+  // 滚动是**自己按帧推**的（`scrollCardsTo`），所以要把它推到静止再看位置。
+  await settleScroll();
+  expect('自动跟随停在行顶边上', cardsEl.scrollTop, 106);
   expect('视口顶部正好落在行顶边上', (cardsEl.scrollTop - CARD_LAYOUT.padTop) % PITCH, 0);
 
-  const targets = [...new Set(cardsEl.scrollToCalls.map((call) => call.top))].sort((a, b) => a - b);
-  expectTrue(
-    `每一跳都落在行顶边上（${targets.join(' / ')}）`,
-    targets.every((top) => (top - CARD_LAYOUT.padTop) % PITCH === 0)
-  );
-
   // 用户往上滚 → 停跟随（此时墙在最底部，往上滚就是 scrollTop 变小）
-  const callsBeforeUp = cardsEl.scrollToCalls.length;
   cardsEl.scrollTop = 0;
-  cardsEl.handlers.scroll();
+  await flush();
   resizeCallback(); // 盒子没变时重算也不该动滚动条
-  await flush();
-  expect('往上滚之后不再自动跟随', cardsEl.scrollToCalls.length, callsBeforeUp);
+  await settleScroll();
+  expect('往上滚之后不再自动跟随', cardsEl.scrollTop, 0);
 
-  // 滚回底部 → 恢复跟随
+  // 滚回底部 → 恢复跟随。判据：再补一行的量，墙应该继续往下跟。
   cardsEl.scrollTop = cardsEl.scrollHeight - cardsEl.clientHeight;
-  cardsEl.handlers.scroll();
+  await flush(); // 让 scroll 监听跑掉，autoFollow 才会恢复
+  cardsEl.innerHTML += '<article class="card" data-path="extra"></article>';
   resizeCallback();
-  await flush();
-  expect('滚回底部后恢复跟随', cardsEl.scrollToCalls.length > callsBeforeUp, true);
+  await settleScroll();
+  expectTrue('滚回底部后恢复跟随（新补的那行被跟上了）', cardsEl.scrollTop > 0);
+
+  // ---- 场景 7.1：滚动的速度上限（用户明确要的"最大滚动速度"）----
+  // 要造一个"目标一下跳到十几行外"的落差来采样，否则采到的只是动画尾巴上那几像素。
+  const scrollCap = Number(/SCROLL_MAX_PX_PER_SEC\s*=\s*(\d+)/.exec(source)[1]);
+  // 帧长被夹在 64ms 以内（见 scrollFrame），所以单帧位移的上界就是这个数。
+  const maxStepPerFrame = (scrollCap * 64) / 1000;
+  const jumpFrom = cardsEl.scrollTop;
+  cardsEl.innerHTML += Array.from(
+    { length: 60 },
+    (_, i) => `<article class="card" data-path="pad${i}"></article>`
+  ).join('');
+  resizeCallback();
+  const steps = [];
+  let prevTop = cardsEl.scrollTop;
+  for (let i = 0; i < 4000 && rafQueue.length; i += 1) {
+    await flush();
+    steps.push(Math.abs(cardsEl.scrollTop - prevTop));
+    prevTop = cardsEl.scrollTop;
+  }
+  const biggestStep = Math.max(...steps);
+  expectTrue(
+    `目标跳了 ${Math.round(prevTop - jumpFrom)}px，是一帧帧挪过去的（${steps.length} 帧）`,
+    prevTop - jumpFrom > 500 && steps.length > 50
+  );
+  expectTrue(
+    `单帧最大位移 ${biggestStep.toFixed(1)}px 没超上限 ${maxStepPerFrame}px`,
+    biggestStep <= maxStepPerFrame + 0.01
+  );
 
   // 点卡片 = 在资源管理器中定位
   invokeLog = [];
