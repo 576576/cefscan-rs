@@ -8,7 +8,7 @@ use std::time::Instant;
 
 use crate::error::ScanError;
 use crate::group::{DetectedApp, group};
-use crate::model::{AppInfo, Backend, Candidate, ScanOptions, ScanStats};
+use crate::model::{AppInfo, Backend, Candidate, ScanNotice, ScanOptions, ScanStats};
 use crate::process::{self, ProcessKey};
 use crate::size::sizes_parallel_each;
 use crate::walk::walk;
@@ -31,7 +31,7 @@ pub struct ScanOutcome {
 /// 单个文件读不到、单个目录没权限都只会降级，不会中断扫描。
 pub fn scan(options: &ScanOptions) -> Result<ScanOutcome, ScanError> {
     let mut apps = Vec::new();
-    let stats = scan_streaming(options, |app| apps.push(app))?;
+    let stats = scan_streaming(options, |app| apps.push(app), |_| {})?;
     sort_apps(&mut apps, options.sort_by_size);
     Ok(ScanOutcome { apps, stats })
 }
@@ -59,11 +59,33 @@ pub fn sort_apps(apps: &mut [AppInfo], by_size: bool) {
 /// 而不是等最慢的那个目录计量完才一次性刷出全部结果。
 /// CLI 用 `scan()` 收集成 `Vec` 再排序。两者共用同一条流水线，
 /// 不存在"GUI 结果和 CLI 结果不一致"的可能。
-pub fn scan_streaming<F>(options: &ScanOptions, on_app: F) -> Result<ScanStats, ScanError>
+///
+/// `on_notice` 在**后端刚选定的那一刻**被调用一次，早于任何 `on_app`。
+/// 用 `FnOnce` 而不是 `FnMut`：它在语义上只该发生一次，而且 `FnOnce` 对调用方
+/// 更宽松（不需要可变借用）。它也不需要 `Send`——通知在调用者线程上同步发出，
+/// 不进任何工作线程池。
+///
+/// # Errors
+///
+/// 同 `scan()`。
+pub fn scan_streaming<F, G>(
+    options: &ScanOptions,
+    on_app: F,
+    on_notice: G,
+) -> Result<ScanStats, ScanError>
 where
     F: FnMut(AppInfo) + Send,
+    G: FnOnce(ScanNotice),
 {
     let started = Instant::now();
+
+    // 先挑后端再枚举进程：后端名要第一时间报出去（GUI 靠它把"自动"变成
+    // "自动（cefscan）"），而进程枚举跟选后端毫无关系，放到后面能让这条通知
+    // 早几十毫秒到达。
+    let (candidates, backend_name, dirs_scanned) = discover(options)?;
+    on_notice(ScanNotice {
+        backend: backend_name,
+    });
 
     let running: HashSet<ProcessKey> = if options.detect_running {
         process::running_processes()
@@ -71,7 +93,6 @@ where
         HashSet::new()
     };
 
-    let (candidates, backend_name, dirs_scanned) = discover(options)?;
     let threads = resolve_scan_threads(options.scan_threads);
 
     let detected = group(&candidates, threads);
@@ -190,4 +211,141 @@ fn resolve_scan_threads(configured: usize) -> usize {
     std::thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(2)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use std::path::Path;
+
+    struct Fixture {
+        root: PathBuf,
+    }
+
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.root);
+        }
+    }
+
+    fn fixture(name: &str) -> Fixture {
+        let root = std::env::temp_dir().join(format!(
+            "cefscan-scan-{}-{}-{}",
+            name,
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        fs::create_dir_all(&root).unwrap();
+        Fixture { root }
+    }
+
+    /// 造一棵最小但**能被认出来**的应用树。
+    ///
+    /// 两个文件缺一不可：`libcef.*` 让遍历阶段产出候选，`chrome` / `chrome.exe`
+    /// 让 `inspect_directory` 只凭文件名就定死类型（不必真读文件内容），
+    /// 所以这个 fixture 在两个平台上都成立。
+    fn write_app(root: &Path, name: &str) {
+        let dir = root.join(name);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join(if cfg!(windows) {
+                "libcef.dll"
+            } else {
+                "libcef.so"
+            }),
+            b"not a real binary",
+        )
+        .unwrap();
+        fs::write(
+            dir.join(if cfg!(windows) {
+                "chrome.exe"
+            } else {
+                "chrome"
+            }),
+            b"x",
+        )
+        .unwrap();
+    }
+
+    fn options_for(root: &Path, backend: Backend) -> ScanOptions {
+        ScanOptions {
+            roots: vec![root.to_path_buf()],
+            backend,
+            ..ScanOptions::default()
+        }
+    }
+
+    /// 后端名必须在**第一条结果之前**送达，否则 GUI 里的"自动（cefscan）"
+    /// 就退化成"扫描完才告诉你"，等于白做。
+    ///
+    /// 顺带守住 filter 的一个历史 bug：fixture 建在 `temp_dir()` 下，Linux 上
+    /// 就是 `/tmp`——它在 `PLATFORM_EXCLUDED_ROOTS` 里，但作为**显式 root**
+    /// 必须照扫不误。所以下面那句"找到了 1 个应用"不是废话断言。
+    #[test]
+    fn notice_reports_the_backend_before_any_result() {
+        let fixture = fixture("notice");
+        write_app(&fixture.root, "app");
+
+        let log = Mutex::new(Vec::new());
+        let stats = scan_streaming(
+            &options_for(&fixture.root, Backend::Filesystem),
+            |app| {
+                log.lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .push(format!("app:{}", app.path.display()));
+            },
+            |notice| {
+                log.lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .push(format!("notice:{}", notice.backend));
+            },
+        )
+        .unwrap();
+
+        let log = log.into_inner().unwrap_or_else(|e| e.into_inner());
+        assert_eq!(log.first().map(String::as_str), Some("notice:cefscan"));
+        assert_eq!(log.len(), 2, "通知只发一次，然后才是结果：{log:?}");
+        assert_eq!(stats.backend, "cefscan");
+        assert_eq!(stats.apps, 1);
+    }
+
+    /// 没有索引服务可用时，"自动"必须悄悄回落到遍历，并且**如实**说自己是谁。
+    #[cfg(not(all(feature = "everything", target_os = "windows")))]
+    #[test]
+    fn auto_backend_falls_back_to_cefscan_and_says_so() {
+        let fixture = fixture("auto-fallback");
+        write_app(&fixture.root, "app");
+
+        let seen = Mutex::new(None);
+        let stats = scan_streaming(
+            &options_for(&fixture.root, Backend::Auto),
+            |_| {},
+            |notice| *seen.lock().unwrap_or_else(|e| e.into_inner()) = Some(notice.backend),
+        )
+        .unwrap();
+
+        let seen = seen.into_inner().unwrap_or_else(|e| e.into_inner());
+        assert_eq!(seen, Some("cefscan"));
+        assert_eq!(stats.backend, "cefscan");
+        assert_eq!(stats.apps, 1);
+    }
+
+    /// 显式要求索引后端时**不许**回落：宁可报错，也不给用户一个"我按你说的做了"
+    /// 的假象。
+    #[cfg(not(all(feature = "everything", target_os = "windows")))]
+    #[test]
+    fn index_backend_without_a_service_is_an_error() {
+        let fixture = fixture("index-unsupported");
+        write_app(&fixture.root, "app");
+
+        let error = scan(&options_for(&fixture.root, Backend::Index)).unwrap_err();
+        assert!(
+            matches!(error, ScanError::BothBackendsFailed { .. }),
+            "期望 BothBackendsFailed，实得 {error}"
+        );
+    }
 }

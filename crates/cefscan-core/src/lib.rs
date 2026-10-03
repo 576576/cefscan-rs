@@ -32,6 +32,8 @@ pub mod size;
 pub mod walk;
 
 pub use error::{ScanError, ScanResult};
-pub use model::{AppInfo, AppKind, Backend, Candidate, CandidateKind, ScanOptions, ScanStats};
+pub use model::{
+    AppInfo, AppKind, Backend, Candidate, CandidateKind, ScanNotice, ScanOptions, ScanStats,
+};
 pub use naming::display_name;
 pub use scan::{ScanOutcome, scan, scan_streaming, sort_apps};

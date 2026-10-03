@@ -178,3 +178,18 @@ pub struct ScanStats {
     /// 扫描耗时。
     pub elapsed_ms: u64,
 }
+
+/// 扫描过程中的阶段性通知。
+///
+/// 和 [`AppInfo`] / [`ScanStats`] 的区别：那些是**结果**，这个是**进度**。
+/// 目前只有一个字段，存在的唯一理由是：后端名在挑选后端的那一刻就确定了，
+/// 比第一批结果早得多（索引后端毫秒级，遍历后端要先把候选找完才可能出第一条结果），
+/// 而用户希望在点下"扫描"之后立刻看到实际用的是哪个后端，而不是等扫描结束。
+///
+/// 想让"自动"这个选项对用户可信，就必须能实时看到它到底选了谁。
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+pub struct ScanNotice {
+    /// 实际使用的后端名，取值与 `ScanStats::backend` 同源。
+    pub backend: &'static str,
+}

@@ -89,9 +89,13 @@ async fn scan_apps(
     let item_channel = channel.clone();
     let outcome = tauri::async_runtime::spawn_blocking(move || {
         // CPU/IO 密集，必须走 spawn_blocking，不能堵住 async 运行时。
-        cefscan_core::scan_streaming(&options, |app| {
-            let _ = item_channel.send(ScanEvent::Item(app.into()));
-        })
+        cefscan_core::scan_streaming(
+            &options,
+            |app| {
+                let _ = item_channel.send(ScanEvent::Item(app.into()));
+            },
+            |_| {},
+        )
     })
     .await
     .map_err(|error| format!("scan task failed: {error}"))?;
