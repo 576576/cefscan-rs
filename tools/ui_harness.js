@@ -81,7 +81,9 @@ const el = (id) => {
 const CARD_LAYOUT = {
   cardH: 116, // 与 styles.css 的 --card-h 一致
   gap: 14, // 与 --card-gap 一致
-  padTop: 56,
+  // 顶部区域（图标胶囊 + 条数）已经挪到 #cards **外面**了，所以卡片墙自己的
+  // 上内边距是 0。公式里仍然带着它，见 main.js 的 followNewest。
+  padTop: 0,
   padBottom: 18,
   clientHeight: 705,
   columns: 6,
@@ -196,7 +198,9 @@ global.document = {
   querySelectorAll: (selector) => {
     if (selector === 'th[data-sort]') return [sortHeader];
     if (selector === '.status-text') {
-      return [el('picker-status'), el('classic-status'), el('status')];
+      // 经典模式那条"您的电脑里有 N 个 Chromium"不在这个列表里——它有自己的
+      // 文案格式，挂在 #classic-count 上。
+      return [el('picker-status'), el('status')];
     }
     return [];
   },
@@ -329,6 +333,27 @@ const PITCH = CARD_LAYOUT.cardH + CARD_LAYOUT.gap;
   expectTrue('经典视图存在且可被解析', classicSection);
   expect('经典视图里没有工具条', /class="toolbar"/.test(classicSection[0]), false);
   expectTrue('经典视图有悬浮 HUD', /class="hud"/.test(classicSection[0]));
+  expect('经典视图里没有状态行（条数不再混在 .status-text 里）', /class="[^"]*status-text/.test(classicSection[0]), false);
+
+  // 两个胶囊**只放图标不放文字**：把 svg 和标签都剥掉之后不该剩下任何东西。
+  const buttonInner = (id) => {
+    const match = new RegExp(`<button[^>]*id="${id}"[^>]*>([\\s\\S]*?)</button>`).exec(html);
+    return match ? match[1] : null;
+  };
+  const visibleText = (inner) =>
+    inner === null
+      ? '<缺失>'
+      : inner.replace(/<svg[\s\S]*?<\/svg>/g, '').replace(/<[^>]+>/g, '').trim();
+  expectTrue('经典模式有返回胶囊', /id="classic-back"/.test(html));
+  expectTrue('经典模式有刷新胶囊（原来显示条数那个）', /id="classic-refresh"/.test(html));
+  expect('返回胶囊里没有可见文字', visibleText(buttonInner('classic-back')), '');
+  expect('刷新胶囊里没有可见文字', visibleText(buttonInner('classic-refresh')), '');
+
+  // 结果条数是独立元素，初值就写明 0——没有单独的空态文案。
+  expectTrue(
+    '条数初值就是"您的电脑里有 0 个 Chromium"',
+    /id="classic-count"[^>]*>您的电脑里有 0 个 Chromium</.test(html)
+  );
 
   // ---- 静态检查：卡片墙的 CSS ----
   expectTrue('卡片墙用 auto-fill 自适应列数', /repeat\(auto-fill,\s*minmax\(/.test(css));
@@ -342,6 +367,22 @@ const PITCH = CARD_LAYOUT.cardH + CARD_LAYOUT.gap;
   expectTrue('经典模式换肤仍在', /html\.classic\s*\{/.test(css));
   // "缓缓浮现"只属于经典模式的卡片墙；工具模式是即时的，那条表格动画已经够不着了。
   expect('表格已无入场动画', /row-enter/.test(css), false);
+
+  // 这一批是"卡片墙不铺满页面 / 卡片透明 / 名称不被裁 / 滚动条藏起来"的静态约束。
+  expectTrue('卡片是等宽等高的圆钮', /\.icon-pill\s*\{[^}]*width:\s*34px[^}]*height:\s*34px/.test(css));
+  expectTrue('条数用百分比上边距（跟着背景缩放走）', /\.classic-count\s*\{[^}]*padding:\s*[\d.]+%/.test(css));
+  expectTrue('卡片墙两侧留出空档', /\.cards\s*\{[^}]*padding:\s*0\s+[\d.]+%/.test(css));
+  expectTrue('卡片墙隐藏滚动条（标准属性）', /\.cards\s*\{[^}]*scrollbar-width:\s*none/.test(css));
+  expectTrue('卡片墙隐藏滚动条（WebKit）', /\.cards::-webkit-scrollbar\s*\{\s*display:\s*none/.test(css));
+  expectTrue(
+    '卡片背景是变量且为全透明',
+    /--card-bg:\s*transparent/.test(css) && /\.card\s*\{[^}]*background:\s*var\(--card-bg\)/.test(css)
+  );
+  // 名称下部被切是因为卡片定高 116px 装不下内容，所以内边距和行距必须收紧。
+  expectTrue('卡片内边距收到 10px', /\.card\s*\{[^}]*padding:\s*10px/.test(css));
+  expectTrue('卡片行距收到 6px', /\.card\s*\{[^}]*gap:\s*6px/.test(css));
+  expectTrue('应用名行高写死（不继承 1.5）', /\.card-name\s*\{[^}]*line-height:\s*[\d.]+/.test(css));
+  expect('已无"还没有结果"空态', /cards-empty|还没有结果/.test(css + source), false);
 
   const bgUrl = /url\("([^"]+)"\)/.exec(css);
   expectTrue('背景图在 frontendDist 里存在', bgUrl && fs.existsSync(path.join(UI, bgUrl[1])));
@@ -380,9 +421,11 @@ const PITCH = CARD_LAYOUT.cardH + CARD_LAYOUT.gap;
   expect('队列清空后全部出齐', paintedCards(), 5);
   expect('队列清空后才显示汇总', el('summary').hidden, false);
   expect('汇总区后端', el('sum-backend').textContent, '自动（Everything）');
-  expect('状态文字带合计（经典模式没有汇总栏）', el('status').textContent, '完成，共 5 个 · 合计 1 B');
-  expect('三处状态行内容一致', el('classic-status').textContent, el('status').textContent);
+  expect('工具模式的状态行照旧带合计', el('status').textContent, '完成，共 5 个 · 合计 1 B');
+  // 经典模式的结果显示是顶部那行条数，格式跟工具模式的状态行不一样。
+  expect('经典模式条数文案', el('classic-count').textContent, '您的电脑里有 5 个 Chromium');
   expect('按钮恢复', startButton.disabled, false);
+  expect('刷新胶囊恢复可用', el('classic-refresh').disabled, false);
 
   // 点表头排序会整墙重绘——已经在屏幕上的卡片不该重放一次入场动画。
   // （经典模式下 render() 也是画卡片墙，所以这个表头点得出一次真正的重绘。）
@@ -414,10 +457,46 @@ const PITCH = CARD_LAYOUT.cardH + CARD_LAYOUT.gap;
   expect('工具模式摘掉喜报皮肤', documentElement.classList.contains('classic'), false);
   expect('进工具模式就探测后端（不等点开始扫描）', invokeLog[0], 'detect_backend');
   expect('探测结果写进 chip', backend.textContent, '自动（Everything）');
+  // 进入工具模式**不自动开扫**：它有自己的工具栏，先让人把目录填了再按"开始扫描"。
+  expect('进入工具模式不自动开扫', invokeLog.filter((c) => c === 'scan_apps').length, 0);
+  // 而且是直接复用上一轮那 5 条，不是清空重来。
+  expect('进工具模式直接复用已有结果', paintedRows(), 5);
+
+  invokeLog = [];
+  scanButton.handlers.click();
+  await flush();
   expect('工具模式立即出结果', paintedRows(), 3);
   expect('工具模式不做入场动画', enteringRows(), 0);
   expect('工具模式立即收尾', el('status').textContent, '完成，共 3 个 · 合计 1 B');
   expect('探测和扫描用同一份 request', JSON.stringify(probeRequest), JSON.stringify(scanRequest));
+
+  // ---- 场景 4.5：已经有结果时切模式只复用，不重扫也不清空 ----
+  const scansBeforeSwitch = invokeLog.filter((c) => c === 'scan_apps').length;
+  el('tool-back').handlers.click(); // 回选择页
+  await flush();
+  el('mode-classic').checked = true;
+  el('mode-tool').checked = false;
+  startButton.handlers.click();
+  await flush();
+  expect(
+    '有结果时切到经典模式不重扫',
+    invokeLog.filter((c) => c === 'scan_apps').length,
+    scansBeforeSwitch
+  );
+  expect('切过去看到的是原来那批结果', paintedCards(), 3);
+  // 切回工具模式同样不重扫。
+  el('classic-back').handlers.click();
+  await flush();
+  el('mode-tool').checked = true;
+  el('mode-classic').checked = false;
+  startButton.handlers.click();
+  await flush();
+  expect(
+    '再切回工具模式也不重扫',
+    invokeLog.filter((c) => c === 'scan_apps').length,
+    scansBeforeSwitch
+  );
+  expect('切回工具模式看到同一批结果', paintedRows(), 3);
 
   // ---- 场景 5：点 chip 重新探测（结果确实由探测写入，不是扫描事件顺手带的）----
   invokeLog = [];
@@ -456,15 +535,15 @@ const PITCH = CARD_LAYOUT.cardH + CARD_LAYOUT.gap;
   );
   expectTrue('揭示队列放完且收尾（36 张）', drained);
 
-  // 36 张 / 每行 6 列 = 6 行。
-  //   自然溢出 = 56 + (6*116 + 5*14) + 18 - 705 = 135
-  //   最后一行底边 = 56 + 5*130 + 116 = 822，要让它完整可见：minTop = 822 - 705 = 117
-  //   对齐到行顶边：56 + ceil((117-56)/130)*130 = 56 + 130 = 186
-  //   底部内边距补到够滚：18 + (186 - 135) = 69
+  // 36 张 / 每行 6 列 = 6 行。顶部区域（胶囊 + 条数）在 #cards 外面，所以 padTop = 0。
+  //   自然溢出 = 0 + (6*116 + 5*14) + 18 - 705 = 79
+  //   最后一行底边 = 0 + 5*130 + 116 = 766，要让它完整可见：minTop = 766 - 705 = 61
+  //   对齐到行顶边：0 + ceil((61-0)/130)*130 = 130
+  //   底部内边距补到够滚：18 + (130 - 79) = 69
   expect('卡片全画出来', paintedCards(), 36);
-  expect('自动跟随的目标对齐到整行', lastScrollTop(), 186);
+  expect('自动跟随的目标对齐到整行', lastScrollTop(), 130);
   expect('底部内边距补成整行', cardsEl.style.paddingBottom, '69px');
-  expect('确实滚到了目标位置（没有被夹）', cardsEl.scrollTop, 186);
+  expect('确实滚到了目标位置（没有被夹）', cardsEl.scrollTop, 130);
   expect('视口顶部正好落在行顶边上', (cardsEl.scrollTop - CARD_LAYOUT.padTop) % PITCH, 0);
 
   const targets = [...new Set(cardsEl.scrollToCalls.map((call) => call.top))].sort((a, b) => a - b);
@@ -494,11 +573,32 @@ const PITCH = CARD_LAYOUT.cardH + CARD_LAYOUT.gap;
   await flush();
   expect('点卡片会请求定位', invokeLog[0], 'reveal');
 
+  // ---- 场景 7.5：经典模式 0 个结果也照实说，不画空态 ----
+  // 注意这里用**刷新胶囊**而不是选择页那个按钮：已经有 36 条结果了，选择页的按钮
+  // 现在只会切视图、不会重扫（这正是"切模式复用结果"那条要求）。
+  invokeLog = [];
+  scripted = [{ type: 'started', backend: 'cefscan' }, done(0)];
+  el('classic-refresh').handlers.click();
+  await flush();
+  expect('0 个结果照实说', el('classic-count').textContent, '您的电脑里有 0 个 Chromium');
+  expect('空态不画任何卡片', paintedCards(), 0);
+
+  // ---- 场景 7.6：刷新胶囊 = 重扫一次 ----
+  invokeLog = [];
+  scripted = [{ type: 'started', backend: 'cefscan' }, item('Z', 10), done(1)];
+  el('classic-refresh').handlers.click();
+  await flush();
+  expect('刷新胶囊会重扫', invokeLog.filter((cmd) => cmd === 'scan_apps').length, 1);
+  expect('刷新后条数跟着更新', el('classic-count').textContent, '您的电脑里有 1 个 Chromium');
+  // 经典模式的 `done` 要等揭示队列排空才收尾（deferredDone），所以这里必须等它真的
+  // 结束——不然 `scanning` 还挂着，后面点"开始扫描"会被 runScan 直接挡掉。
+  await waitUntil(() => !el('classic-refresh').disabled, 3000);
+
   // ---- 场景 8：失败路径不能挂着"待检测" ----
   el('mode-tool').checked = true;
   el('mode-classic').checked = false;
   scripted = [{ type: 'error', message: 'boom' }];
-  startButton.handlers.click();
+  scanButton.handlers.click();
   await flush();
   expect('失败后端文案', backend.textContent, '自动（未确定）');
   expect('失败状态', el('status').textContent, '失败：boom');

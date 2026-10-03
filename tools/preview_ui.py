@@ -26,9 +26,9 @@
 是 705，`ResizeObserver` 也不触发）——那是合成层的重排。后果是截图那一刻最大滚动量
 变小、`scrollTop` 被夹回，卡片墙顶部会切掉小半行（切掉的正是 800-705 = 95 px）。
 **这是截图工具的假象，不是前端 bug**：滚到顶（scrollTop=0，夹不动）再量，行顶边
-精确落在 `padTop + k*行距` = 56 / 186 / 316 / 446 / 576 / 706。所以经典模式截图前
-会先滚到顶，让画面可确定；"跟最新一行"的几何正确性看 title 里的 `对齐残差`
-（0 表示视口顶部正好落在行顶边上）。
+精确落在 `padTop + k*行距` = 0 / 130 / 260 / 390 / 520 / 650（顶部区域已经挪到
+`#cards` 外面，所以这里的 padTop 是 0）。所以经典模式截图前会先滚到顶，让画面可确定；
+"跟最新一行"的几何正确性看 title 里的 `对齐残差`（0 表示视口顶部正好落在行顶边上）。
 """
 import pathlib
 import shutil
@@ -147,6 +147,9 @@ def driver(mode: str) -> str:
         const radio = document.getElementById({js('mode-' + mode)});
         if (radio) radio.checked = true;
         document.getElementById('start-button').click();
+        // 工具模式下选择页那个按钮**只切视图、不开扫**（得先让人把目录填了），
+        // 所以预览里还得自己点一下工具栏的"开始扫描"。
+        if ({js(mode)} === 'tool') document.getElementById('scan-button').click();
 
         const report = () => {{
           const c = document.getElementById('cards');
@@ -156,7 +159,12 @@ def driver(mode: str) -> str:
           const padTop = Number.parseFloat(style.paddingTop) || 0;
           // 对齐判据：视口顶部落在行顶边上 ⟺ (scrollTop - padTop) 是行距的整数倍。
           const align = pitch > 0 ? (c.scrollTop - padTop) % pitch : 'n/a';
-          document.title = 'status=' + document.getElementById('status').textContent
+          // 经典模式的结果显示是顶部那行条数（#classic-count），工具模式才是工具栏
+          // 那条状态行。两者文案格式不同，别读错。
+          const statusNode = document.getElementById(
+            {js(mode)} === 'classic' ? 'classic-count' : 'status'
+          );
+          document.title = 'status=' + statusNode.textContent
             + ' | backend=' + document.getElementById('backend-display').textContent
             + ' | cards=' + c.querySelectorAll('.card').length
             + ' | rows=' + document.querySelectorAll('#results-body tr[data-path]').length
