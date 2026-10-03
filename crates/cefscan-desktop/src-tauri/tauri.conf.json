@@ -11,7 +11,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "cefscanw — Chromium 内核应用扫描器",
+        "title": "cefscanw",
         "width": 1180,
         "height": 760,
         "minWidth": 860,
