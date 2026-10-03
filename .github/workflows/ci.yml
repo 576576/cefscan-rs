@@ -8,6 +8,17 @@
 #   build —— 两个平台各出一份 release 产物（cefscan + cefscanw + README + LICENSE），
 #            上传为 artifact。
 #
+# 关于 Rust 版本：用 @stable，跟着最新的稳定版走。
+# 代价要心里有数：rust-cache 的 key 里含 rustc 版本哈希，所以 `stable` 每 6 周往前
+# 挪一次，缓存就整体失效一次，test/build 要从零重编一遍。实测同一台 runner 上：
+#
+#   Sep 28 那次（1.98.1，缓存命中）  测试步骤 ≈ 1 min
+#   Oct 3  那次（1.99.0，缓存失效）  测试步骤 ≈ 10 min，其中跑测试只占 1.2 s
+#
+# 也就是说，慢的那次是"每 6 周一次"的全量重编，不是测试本身慢。真要躲开它，
+# 把三处 `dtolnay/rust-toolchain@stable` 换成具体版本号即可（顺带也让 CI 可复现）。
+# 真正把编译时间压下来的是 test job 的 `--profile ci`（见那边注释）。
+#
 # 关于 Linux 的系统依赖：cefscanw 是 Tauri 2 应用，Linux 上编译需要 webkit2gtk-4.1
 # 等开发包。即使只跑测试也会编译 cefscanw（它在 workspace 里），所以每个 Linux job
 # 都要装。我们没有用 tray-icon 特性，因此不需要 libappindicator3-dev —— 顺带一提，
@@ -40,7 +51,7 @@ jobs:
     name: lint (fmt + clippy)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # 放在最前面：纯 Python，秒级出结果。bundle.icon 的约束只在 Unix 目标上生效
       # （Windows 走 .ico 资源），本地和 Windows CI 都看不出来，只有 Linux 会在
@@ -48,6 +59,14 @@ jobs:
       - name: 校验图标文件
         run: python3 tools/check_icons.py
 
+      # ui/main.js 是唯一一段 cargo test 覆盖不到的代码，而它承载的恰恰是几个
+      # "错了也看不出来"的行为：揭示队列的节拍、row.painted 防重放、经典模式开关时
+      # 的队列收尾。这里拿一个几十行的 DOM 桩顶替浏览器，断言的是调用次数和时序。
+      # 纯 Node、无需 npm install（runner 自带 node），半秒跑完，所以放 lint 里。
+      - name: 前端逻辑
+        run: node tools/ui_harness.js
+
+      # @stable 而不是钉版本号，理由见文件头。要复现某次构建就把它换成 `@1.99.0`。
       - name: 安装 Rust
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -91,8 +110,9 @@ jobs:
           - name: linux-x86_64
             os: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
+      # @stable 而不是钉版本号，理由见文件头。要复现某次构建就把它换成 `@1.99.0`。
       - name: 安装 Rust
         uses: dtolnay/rust-toolchain@stable
 
@@ -110,9 +130,13 @@ jobs:
             librsvg2-dev
 
       - name: 测试
+        # --profile ci：依赖不优化、不带 debuginfo。这一步的耗时几乎全是编译，
+        #   而测试本身只跑 1 秒多，所以这个 profile 直接把编译时间砍掉六成
+        #   （本地冷 target 实测 168s → 63s，target 目录 3.2 GB → 1.8 GB，
+        #   顺带让缓存上传下载也快一截）。本地 dev profile 不受影响。
         # --no-fail-fast：cargo 默认遇到第一个失败的测试目标就停，
-        # 那样一次只能看到一部分失败（第一次跑 Linux 时 doctest 和 cefscanw 都没跑到）。
-        run: cargo test --workspace --locked --no-fail-fast
+        #   那样一次只能看到一部分失败（第一次跑 Linux 时 doctest 和 cefscanw 都没跑到）。
+        run: cargo test --workspace --locked --no-fail-fast --profile ci
 
   build:
     name: build (${{ matrix.name }})
@@ -129,8 +153,9 @@ jobs:
             os: ubuntu-latest
             exe: ""
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
+      # @stable 而不是钉版本号，理由见文件头。要复现某次构建就把它换成 `@1.99.0`。
       - name: 安装 Rust
         uses: dtolnay/rust-toolchain@stable
 
@@ -169,7 +194,7 @@ jobs:
           "./dist/cefscan${{ matrix.exe }}" --help > /dev/null
 
       - name: 上传产物
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: cefscan-${{ matrix.name }}
           path: dist/

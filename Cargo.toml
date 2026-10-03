@@ -50,3 +50,20 @@ opt-level = 0
 
 [profile.dev.package."*"]
 opt-level = 2
+
+# CI 专用 profile。本地 dev 保留 opt-level = 2 的依赖（`cargo run` 的扫描速度
+# 才是真实体感）和完整 debuginfo（好调试），但这两样在 CI 上纯属浪费——测试
+# 只跑 1 秒多，编译却要 10 分钟。实测（16 核，冷 target）：
+#
+#   默认 dev        168s   target/debug 3.2 GB
+#   debug = 0       143s                 1.6 GB
+#   ci profile       63s   target/ci     1.8 GB
+#
+# 关键那一刀砍在 `[profile.dev.package."*"] opt-level = 2`：它让 tauri 那一
+# 整棵依赖树都开了优化，而测试根本不在乎依赖跑得快不快。
+[profile.ci]
+inherits = "dev"
+debug = 0
+
+[profile.ci.package."*"]
+opt-level = 0
