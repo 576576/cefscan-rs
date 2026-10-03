@@ -257,8 +257,16 @@ function paintPathCell(row) {
   cell.innerHTML = pathCellHtml(path, expanded);
 }
 
-function sortRows() {
-  rows.sort((left, right) => {
+/**
+ * 按当前排序键返回**排好序的副本**（工具页用）。
+ *
+ * 关键在"副本"两个字：`rows` 的原始顺序是**扫描结果的到达顺序**，经典模式的卡片墙
+ * 靠它保持"卡片弹出的先后位置"——用户明确要求卡片墙**不跟随**工具页的排序（在工具页
+ * 点了表头，切回经典页时顺序不该变）。所以排序只发生在工具页自己的渲染里，本源顺序
+ * 谁都不许动。原地排 `rows` 会让两个视图互相干扰。
+ */
+function sortedRows() {
+  return rows.slice().sort((left, right) => {
     let order;
     switch (sortKey) {
       case 'size':
@@ -306,7 +314,8 @@ function renderTable() {
   empty.hidden = rows.length > 0;
 
   // 全盘扫描可能有上千条结果，只渲染前 MAX_ITEMS 条，避免 DOM 过大拖慢 WebView。
-  const visible = rows.slice(0, MAX_ITEMS);
+  // 排序在这里做（对副本），`rows` 本身保持到达顺序——见 `sortedRows`。
+  const visible = sortedRows().slice(0, MAX_ITEMS);
   const parts = [];
   for (const row of visible) {
     const color = KIND_COLORS[row.kind] || KIND_COLORS.unknown;
@@ -353,6 +362,9 @@ function renderCards() {
   // 条数在**顶部区域**（喜报"喜报"两字正下方），不在滚动区里，所以每次重绘都刷一次。
   classicCount.textContent = classicCountText(rows.length);
 
+  // 卡片墙**按到达顺序**排，不做任何排序：每张新卡片都追加在末尾，"一张张浮现"的
+  // 先后位置就与它出现的时间一致。这也是用户明确要的——卡片墙不跟随工具页的排序，
+  // 在工具页点了表头、切回经典页时卡片的相对位置不变。所以 `rows` 的本源顺序不能动。
   const visible = rows.slice(0, MAX_ITEMS);
   const parts = [];
   for (const row of visible) {
@@ -526,7 +538,6 @@ function pushRow(row) {
   if (view !== 'classic') {
     row.painted = true; // 表格不做入场动画，直接就是"已画过"
     rows.push(row);
-    sortRows();
     scheduleRender();
     setStatus(`已找到 ${rows.length} 个…`);
     return;
@@ -561,7 +572,6 @@ function revealTick() {
   for (let i = 0; i < step && revealQueue.length > 0; i += 1) {
     rows.push(revealQueue.shift());
   }
-  sortRows();
   render();
   setStatus(`已找到 ${rows.length} 个…`);
 }
@@ -752,7 +762,8 @@ function bootstrap() {
         sortKey = key;
         sortAscending = false;
       }
-      sortRows();
+      // 只重画：`sortKey` / `sortAscending` 变了，`renderTable` 会重排一份副本。
+      // 这里**不碰 `rows`**，所以经典页的卡片顺序不受影响（用户明确要求）。
       render();
     });
   }
