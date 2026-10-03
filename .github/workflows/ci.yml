@@ -60,9 +60,10 @@ jobs:
         run: python3 tools/check_icons.py
 
       # ui/main.js 是唯一一段 cargo test 覆盖不到的代码，而它承载的恰恰是几个
-      # "错了也看不出来"的行为：揭示队列的节拍、row.painted 防重放、经典模式开关时
-      # 的队列收尾。这里拿一个几十行的 DOM 桩顶替浏览器，断言的是调用次数和时序。
-      # 纯 Node、无需 npm install（runner 自带 node），半秒跑完，所以放 lint 里。
+      # "错了也看不出来"的行为：揭示队列的节拍、painted 防重放、卡片墙按整行对齐、
+      # 后端 chip 的探测时机与写入竞态。这里拿一个几百行的 DOM 桩顶替浏览器，
+      # 断言的是调用次数和时序。纯 Node、无需 npm install（runner 自带 node），
+      # 半秒跑完，所以放 lint 里。
       - name: 前端逻辑
         run: node tools/ui_harness.js
 

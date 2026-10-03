@@ -95,18 +95,27 @@ cefscan --format ndjson | jq -r .path     # 流式消费
 
 ## cefscanw 用法
 
-双击运行，或 `cefscanw.exe`。窗口顶部一行工具条：
+双击运行，或 `cefscanw.exe`。分**三个视图**，进来先是初始选择页。
+
+**① 初始选择页**：两个模式选项在上、开始扫描按钮在下居中。选好模式点「开始扫描」即可。
+这一页只有这两个选项和一个按钮，**没有目录输入框**——所以第一轮扫描是**全盘**；
+想只扫某个目录，进工具模式后在工具栏里填（见下）。
+
+**② 经典模式**：整张喜报就是画布，**不留工具条**，只有左上角一坨悬浮的小药丸
+（返回 / 状态）。扫描出的应用以**卡片墙**呈现——图标 + 名称 + 占用，每行放几个随窗宽
+自适应；超出屏幕时**按整行**平滑向下滚动（不是滚到半行上），并且**自动跟随最新一行**；
+你手动往上滚它就停下让你翻看，滚回底部又自动恢复。结果不是"啪"地一次全出来，而是
+**一张张缓缓浮现**。适合"我就想看看这台机器上装了多少 Chromium 应用"。
+（背景是 `assets/images/background.webp`——有损 WebP q85、122 KB，会被原样嵌进 exe，
+无损版要 736 KB，而渲染后的截图差分显示两者观感无差别。）
+
+**③ 工具模式**：深色主题的表格视图，用来细看和定位。
 
 - **限定目录**：留空扫描所有盘符，也可以填 `C:\Users\me` 只扫一部分。
-- **后端**：工具条上显示成 `自动（cefscan）` / `自动（Everything）`，括号里是**本次
-  实际使用的后端名**，在点下"扫描"之后立刻刷新（不是等扫完才告诉你）。GUI 不提供
-  后端选择——有索引服务时用索引严格优于遍历，没有时想选也选不上，选择项本身是伪需求。
-  需要强制指定后端请用 CLI 的 `--backend`。
-- **经典模式**（默认勾选）：背景换成 `assets/images/background.webp` 那张喜报，
-  整套配色也跟着换成米黄纸面 + 中国红，并且结果不再"啪"地一次全出来，而是
-  **一条条缓缓浮现**。关掉就回到深色主题、结果即时出现。只影响外观和揭示节奏，
-  不影响任何检测结果，所以扫描途中随时切换都安全。（那张图是有损 WebP q85、122 KB
-  ——它会被原样嵌进 exe，无损版要 736 KB，而渲染后的截图差分显示两者观感无差别。）
+- **后端**：工具条上显示成 `自动（cefscan）` / `自动（Everything）`，括号里是**本次会
+  使用的后端名**。它在你**进入工具模式时**就刷新，点一下 chip 还会再探一次——
+  不必等点了"扫描"才知道。GUI 不提供后端选择：有索引服务时用索引严格优于遍历，没有时
+  想选也选不上，选择项本身是伪需求。需要强制指定后端请用 CLI 的 `--backend`。
 - **开始扫描**（或在输入框按回车）：扫描过程中结果**逐条流式出现**，按占用从大到小排。
 - 表格列：图标 / 名称 / 类型 / 占用 / 运行 / 路径。点表头可切换排序。
   - **名称**是从路径启发式推导的可读应用名（`...\Microsoft VS Code\Code.exe` → `Microsoft VS Code`）。
@@ -117,14 +126,19 @@ cefscan --format ndjson | jq -r .path     # 流式消费
 
 扫描完成后工具条下方会给出应用数、总占用、列表合计、实际使用的后端与耗时。
 
-改前端时的两步验证，都不需要起 GUI：
+**两个视图各自的「返回」只切视图，不打断正在跑的扫描**——结果照旧往同一份数据里堆，
+回到哪个视图都能看到。
 
-1. `node tools/ui_harness.js` —— 用 DOM 桩跑 `ui/main.js`，断言揭示节奏、经典模式
-   开关、发给后端的请求形状等 39 项行为（不需要 npm）。
-2. `python tools/preview_ui.py <输出目录>` —— 生成一份带假数据的静态预览页（把
-   `ui/` 整个抄过去，再塞一个假的 `window.__TAURI__`），浏览器打开即可看效果。
+改前端时的三步验证，都不需要起 GUI：
 
-桩验的是"跑了几次"，截图验的是"长什么样"，两者都跑一遍才算完整。
+1. `node tools/ui_harness.js` —— 用 DOM 桩跑 `ui/main.js`，断言视图切换、后端探测时机、
+   卡片墙对齐数学、发给后端的请求形状等 75 项行为（不需要 npm）。
+2. `python tools/preview_ui.py <输出目录> [picker|classic|tool] [条数]` —— 生成一份带假
+   数据的静态预览页（把 `ui/` 整个抄过去，再塞一个假的 `window.__TAURI__`），
+   浏览器打开即可看效果；不给视图名就三个视图各出一张。
+3. `python tools/gui_smoke.py` —— 真去点窗口的端到端（见下）。
+
+桩验的是"跑了几次和什么顺序"，截图验的是"长什么样"，两者都跑一遍才算完整。
 
 ## 测试
 
@@ -132,7 +146,7 @@ cefscan --format ndjson | jq -r .path     # 流式消费
 cargo test --workspace              # 单测 + doctest
 cargo fmt --all --check             # 格式
 cargo clippy --workspace --all-targets -- -D warnings
-node tools/ui_harness.js            # ui/main.js 的逻辑（39 项，不需要 npm）
+node tools/ui_harness.js            # ui/main.js 的逻辑（75 项，不需要 npm）
 python tools/check_icons.py         # 图标齐全且为 RGBA
 ```
 
@@ -145,14 +159,14 @@ GUI 另有一个**手动**冒烟测试，会真的去点窗口，验证 Tauri co
 ```bash
 cargo build --release
 ./target/release/cefscanw.exe &
-python tools/gui_smoke.py out.png C:/Users/me 6 20
-CEFSCAN_SMOKE_EXPAND=1 python tools/gui_smoke.py out.png C:/Users/me 6   # 额外验证行展开
+python tools/gui_smoke.py out.png --mode classic 6 20
+python tools/gui_smoke.py out.png --mode tool --root C:/Users/me 6 20   # 额外验证限定目录重扫
+CEFSCAN_SMOKE_EXPAND=1 python tools/gui_smoke.py out.png --mode tool 6  # 额外验证行展开
 ```
 
-它会把窗口临时置顶（结束时会取消），免得被终端挡住；两套主题的强调色都认，
-经典模式开着也能跑。
-
-它不写死控件坐标，而是从像素里认按钮和输入框，改布局一般不用改脚本。
+它会把窗口临时置顶（结束时会取消），免得被终端挡住。模式用键盘选（Tab / 方向键），
+按钮靠"实心强调色方块"认出来，改布局一般不用改脚本。注意 `--root` 只对工具模式有效：
+选择页和经典模式都没有目录输入框，给了也只会打印一句提醒。
 
 ## 搜索后端
 

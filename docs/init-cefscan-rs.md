@@ -348,7 +348,7 @@ cefscan benchmark [--rounds N]    # 自测耗时与峰值内存
 
 > **实施偏差（已落地）**：原计划用 React 19 + TS + Vite，实际改为**手写原生
 > HTML/CSS/JS + `withGlobalTauri`**，彻底去掉 Node 工具链。理由是 GUI 只有
-> 一张表格加一条工具条，引入打包器带来的收益抵不过成本：构建要装几百 MB 的
+> 一个选择页、一张卡片墙、一张表格，引入打包器带来的收益抵不过成本：构建要装几百 MB 的
 > node_modules、前端产物还要跟 Rust 产物分别管理，而本项目的硬约束是
 > "一条 `cargo build --release` 出两个 exe"。列表规模用「只渲染前 500 条 +
 > rAF 合并重绘」解决，不需要虚拟滚动。
@@ -367,8 +367,8 @@ cefscan benchmark [--rounds N]    # 自测耗时与峰值内存
     serde 用 `tag = "type"` 打标签。
   - `Started` 带后端名，而且**先于任何 `Item`**：它来自 `scan_streaming` 新增的
     `on_notice` 回调，在 `discover()` 一返回就发出（见 §8.1）。
-- **能力**：图标列 + 名称列 + 类型 + 占用 + 运行 + 路径（可排序）、类型筛选、运行中高亮、
-  经典模式（喜报背景 + 结果缓缓浮现，见 §8.1）、
+- **三个视图**（`index.html`）：初始选择页 → 经典模式（卡片墙）/ 工具模式（表格），
+  见 §8.2。工具模式的能力：图标列 + 名称列 + 类型 + 占用 + 运行 + 路径（可排序）、
   点击行展开完整路径并在资源管理器中定位（`explorer /select,"path"`，注意路径带空格必须加引号，
   参考实现有对应单测 `src/search.rs:875-883`）。
 - **窗口标题就叫 `cefscanw`**，不挂副标题（`tauri.conf.json` 的 `app.windows[0].title`）。
@@ -403,8 +403,12 @@ cefscan benchmark [--rounds N]    # 自测耗时与峰值内存
 
 | 后端 | 显示名 | 来源 |
 | --- | --- | --- |
-| 文件系统遍历 | `cefscan` | `scan::FILESYSTEM_BACKEND` 常量 |
+| 文件系统遍历 | `cefscan` | `model::FILESYSTEM_BACKEND` 常量 |
 | 索引 | **实际服务名**（如 `Everything`） | `scan/everything::SERVICE_NAME` 常量 |
+
+两个常量都放在 `model.rs`（原来是分散在 `scan.rs` 的私有常量和 `everything.rs`
+里），它是**唯一取值来源**：`ScanStats::backend`、`ScanNotice::backend`、
+`scan::detect_backend()` 全读它，改名只需动这一处。
 
 索引后端返回服务名而不是笼统的 `index`，是为了以后接 plocate / Spotlight 时
 显示名能自动跟着变，前端和 CLI 都不用改。GUI 汇总区、CLI 的 stderr 摘要都直接
@@ -423,7 +427,7 @@ core 里的枚举仍叫 `Backend::Filesystem`——它描述的是机制（文�
 干了什么，所以**括号里必须实时显示它选了谁**：
 
 ```
-自动（待扫描）  →  自动（检测中…）  →  自动（cefscan） / 自动（Everything）
+自动（待检测）  →  自动（cefscan） / 自动（Everything）
 ```
 
 关键是"实时"要真的实时。后端名原本只在 `Done` 里回传，用户得等整轮扫描结束才
@@ -442,6 +446,48 @@ on_notice(ScanNotice { backend: backend_name });
   但枚举进程要几十毫秒；挪到后面能让这条通知更早到达。
 - **`scan()` 传 `|_| {}`**：CLI 不需要这条通知（它的 `--verbose` 已经在末尾打印
   后端），所以只在 GUI 这条路径上用得上。
+
+**但"开扫之后"还不够早**（2026-10-03 改）。用户进工具模式第一眼看到的是那个 chip，
+那时扫描还没开始；如果 chip 一直写着"待检测"，"自动"这个选项就不可信——用户没法在
+按下去之前知道它会选谁。所以 chip 的刷新时机改成 **进入工具模式时 + 点 chip 时**，
+都不等点"开始扫描"。
+
+为此 core 多了 `scan::detect_backend(&ScanOptions) -> &'static str`：
+
+```rust
+pub fn detect_backend(options: &ScanOptions) -> &'static str {
+    match options.backend {
+        Backend::Filesystem => FILESYSTEM_BACKEND,
+        // "自动"和"只用索引"的差别只在**失败之后**：前者回落遍历，后者报错。
+        // 挑后端那一刻两者看到的可用性判断是同一个，所以名字也一样。
+        Backend::Auto | Backend::Index => index_service_name().unwrap_or(FILESYSTEM_BACKEND),
+    }
+}
+```
+
+它**必须便宜**：只做 `FindWindowW` 窗口探测（`everything::is_service_available()`），
+**不发查询、不等 `index_timeout`**（默认 1.5 s）——chip 每次进视图/被点都要刷，
+卡 1.5 s 不能接受。探测和真查询共用同一个 `find_service_window()`，保证"报得出来的
+服务"和"问得到的服务"永远是同一个。代价是它只承诺"会选谁"，不保证那次查询一定成功
+（窗口在但 Everything 卡死时照样报 true）；真开扫时后端仍可能超时并（在 `Auto` 下）
+回落到遍历。
+
+`detect_backend` 的选择策略**必须与 `discover()` 一致**，否则 chip 上显示的和结果里
+报的会是两个东西。这条由 `probe_and_scan_report_the_same_backend` 钉死；另有一条
+`probe_never_waits_on_the_index_timeout`（把 `index_timeout` 设成 30 s，断言 1 s 内
+返回）守住"便宜"这个性能契约。
+
+Tauri 侧是 `detect_backend` 命令，返回 `BackendProbe { backend }`——**和
+`ScanEvent::Started` 同形状**，前端两处读到的东西长一样，`probe.backend` 和
+`event.backend` 可以互换着用。它**吃整个 `ScanRequest`** 而不是单个 backend 字符串：
+探的就是"你即将用的那份参数会选谁"，前端把同一份 request 先交给探测、再交给
+`scan_apps`，chip 上写的和结果里报的不可能对不上。
+
+前端还多了一道**写入代次闸**（`backendEpoch`）：`setBackendLabel()` 每次自增，
+`refreshBackend()` 在 `await` 回来之后对不上号就丢弃自己的结果。没有它会出现一个
+真实的竞态——一次在途的探测会在扫描已经失败之后把"未确定"又盖回成一个后端名，
+用户看到的是"失败了，但后端是 cefscan"，自相矛盾。这个 bug 是 `ui_harness.js`
+抓出来的（见 §8.3 的验证一节）。
 
 文案上刻意避开"遍历"/"索引"这类内部叫法，直接显示具体后端名（`cefscan` /
 `Everything`）——用户看到的是"谁去干的活"，而不是"用了哪种算法"。`ScanEvent::Started`
@@ -492,20 +538,86 @@ on_notice(ScanNotice { backend: backend_name });
 **4 线程并发提取同一个 exe 不许失败**（就是上面那个并发 bug 的回归测试；它直接打
 `imp::extract` 而不是 `data_url`，否则会被结果缓存挡住、走不到 shell 调用）。
 
-**经典模式**（`index.html` 里默认 `checked`）：背景换成
-`ui/assets/images/background.webp` 那张喜报，整套配色跟着换成米黄纸面 + 中国红，
-并且结果不再一次全出来，而是**一条条缓缓浮现**。关掉即回深色主题、结果即时出现。
+### 8.2 三视图与经典模式卡片墙（2026-10-03 大改）
 
-几个实现要点：
+界面上线时是"一条工具条 + 一张表格 + 一个经典模式勾选框"。用户看过之后要求改成
+**三个视图**，理由是勾选框把两件不同的事（外观 / 信息密度）压成了一个开关：
+
+```
+① 初始选择页  ──►  ② 经典模式（卡片墙）  ──►  返回
+              └──►  ③ 工具模式（表格）    ──►  返回
+```
+
+- **① 初始选择页**（`#picker`）：两个模式选项在上、开始扫描按钮在下居中（倒三角排布）。
+  **只有两个选项 + 一个开始扫描按钮，没有目录输入框**（用户明确要求）。所以
+  **第一轮扫描永远是全盘**——`#root-input` 在隐藏的工具视图里、值是空串。想限定目录
+  得进工具模式再输一次。**别"顺手"往选择页加输入框**，那会直接违背这条要求。
+- **② 经典模式**（`#classic-view`）：**整张喜报就是画布，不留工具条**（用户明确要求），
+  只有左上角一坨悬浮 HUD（返回 + 状态，都靠 `--panel-solid` 压住图案）。结果画成
+  **卡片墙**，见下。
+- **③ 工具模式**（`#tool-view`）：原来的工具条 + 汇总栏 + 表格，多一个返回。
+
+**三个视图共用一份数据源 `rows`**，各自只是它的一种画法（`render()` 按 `view` 分发到
+`renderTable()` / `renderCards()`）。切视图不重扫，也不会出现"两个视图各记一份、
+慢慢对不上"。**两个视图的「返回」只切视图、不打断正在跑的扫描**。
+
+`view === null`（选择页）时 `render()` 什么都不画。这种状态下到达的结果由 `pushRow`
+直接标成 `painted` 进 `rows`，用户再进某个视图时是一次画完、不补入场动画——他本来就
+没在看，没必要让两百张卡片一起演一遍入场。
+
+**只有经典模式用喜报皮肤，选择页和工具模式都是深色**（用户中途加的指令）。所以
+`<html>` 开局**不带任何主题类**（深色就是 `:root` 的默认值），`showView()` 里
+`document.documentElement.classList.toggle('classic', next === 'classic')` 才加上。
+好处是顺带解决了"脚本跑起来之前闪一下深色"的问题——深色本来就是默认，不存在闪。
+
+#### 卡片墙：按整行滚动
+
+用户的要求是"图标 + 名称 + 占用的矩形逐渐现出并自动换行（每行多少个随窗宽自适应），
+超出屏幕时以**整行**为单位平滑向下滚动"。落成三个约束：
+
+- **每行几个自适应** → `grid-template-columns: repeat(auto-fill, minmax(min(var(--card-min), 100%), 1fr))`。
+  `min(…, 100%)` 那层是必须的，否则窄窗口下 `minmax` 的下界会把网格撑破、横向溢出。
+- **能按整行滚动** → 行高必须确定，所以 `grid-auto-rows: var(--card-h)` 定高
+  （`--card-min: 168px` / `--card-h: 116px` / `--card-gap: 14px`，都在 `:root` 里）。
+  每行等高才有确定的行距可对齐。
+- **对齐到行边界 + 平滑** → `followNewest()`。三件事必须一起做，少一件都会看出破绽：
+
+  1. **量行距用 `offsetHeight` / `offsetTop`，不用 `getBoundingClientRect`**。
+     新卡片正带着入场动画（`translateY(10px) scale(0.96)`），rect 返回的是
+     **动画中的**几何，`scale(0.96)` 会把 116px 的卡片量成 111px，行距随之算小、
+     对齐全偏。`offset*` 是布局值，不受 transform 影响。
+  2. **对齐要带上 `padding-top`**。行顶边在 `padding-top + k * 行距` 处
+     （`padTop = 56px`，给悬浮 HUD 让位），按纯 `k * 行距` 对齐的话视口顶部会切掉
+     小半行。
+  3. **底部内边距动态补足**，让最大滚动量正好等于对齐后的目标位置。不补的话目标超过
+     最大滚动量会被浏览器夹回去，对齐白做——而且最后一行（正是"自动跟随最新"最该看清
+     的那一行）会被视口底部切掉一截。补出来的量小于一个行距，又落在最后一行下方，
+     视觉上看不出来。基准 `padding-bottom` 记在 `cards.dataset.basePadBottom`
+     （只认第一次读到的值），算溢出时先减掉当前补量，这样它就跟当前 padding 无关、
+     不会"补一次改一次"地来回震荡。
+
+  目标是"最后一行完整可见 + 视口顶部落在行顶边"这两个条件的**最小**解，所以内容每多
+  一行目标正好前进一个行距，看上去就是整行整行往上走。
+
+- **自动跟随**：往下跟最新一行；用户**往上滚**就停（按 `scrollTop` 的方向判断，
+  `top < lastScrollTop - 2`），滚回底部（`overflow - top <= FOLLOW_SLACK`，24px）
+  自动恢复。不用 `scrollend`、也不用去区分平滑滚动的中间帧——自动跟随永远向下滚，
+  所以"往上"必定是用户干的。
+- **尺寸变化后重新对齐**：用 `ResizeObserver` 盯 `#cards` 自己的盒子，而不是
+  `window.resize`。前者覆盖面更广（分屏、WebView 自己改尺寸都算），回调本来就按帧
+  合并，拖窗口时不会每个像素都滚一下。改 `padding-bottom` **不会**反过来触发它——
+  `#cards` 的高度由 flex 决定，内边距变了盒子尺寸也不变，不会自己喂自己。
+
+#### 换肤与"缓缓浮现"
 
 - **换肤靠 CSS 变量，不是加遮罩**。深色主题的对比度压在喜报上根本不够用，
-  所以 `html.classic` 直接覆盖整套 `--bg / --panel / --sheet / --text / --muted /
-  --accent / --field / --control / --th / --row-hover / --row-line`。代价是
+  所以 `html.classic` 直接覆盖整套 `--bg / --panel / --panel-solid / --sheet / --text /
+  --muted / --accent / --field / --control / --th / --row-hover / --row-line`。代价是
   `styles.css` 里不能再有写死的颜色——原来那几处 `#1a1c21`、`#2a2e36` 都提成了变量。
   面板透明度留在 0.78~0.84：再厚一点喜报就糊成背景噪声。
-- **主题类挂在 `<html>` 上而不是 `<body>`**：`html, body` 共用同一条
-  `background-*` 规则，变量得能在 `html` 自己身上生效，而且写在 HTML 里就不会
-  等 JS 跑起来才换肤、闪一下深色。
+- **`--panel-solid` 是给"浮在图案上"的元素用的**（选择页面板、HUD 药丸）：喜报正中最亮
+  的那块是纯黄，0.8 的米黄压不住它，文字会发飘，所以这几个元素用 0.93 的更实底色。
+  深色主题下 `--panel-solid` 与 `--panel` 同值（本来就够实）。
 - **背景图必须在 `frontendDist` 里面**（所以放在 `ui/assets/`，不是仓库根的
   `assets/`）。Tauri 只服务 `ui/`，放外面 `<img src>` 根本取不到。放在 `ui/` 下
   的额外好处是它会被 `tauri-codegen` 一起内嵌进 exe，运行时不需要外部文件。
@@ -545,60 +657,91 @@ on_notice(ScanNotice { backend: backend_name });
   一次搬 `ceil(pending * STEP / BUDGET)` 条，积压越多搬得越快，总时长收敛在预算内
   ——否则 500 条按 120 ms 一条要等一分钟。
 - **汇总要等队列排空**（`deferredDone`）。不然会出现"已完成，共 8 个"和还在往外
-  浮的结果同框。
-- **入场动画只给"还没画过"的行**（`row.painted`）。`render()` 每次都重建整个
-  `tbody.innerHTML`，不加这个标记的话，排序、展开、来新结果都会让整表重放一次动画。
-  关掉经典模式时 `pushRow` 直接把 `painted` 置为 `true`，一行动画都不做。
-- 动画挂在 `html.classic tbody tr.enter` 上，并且 `@media (prefers-reduced-motion:
-  reduce)` 里关掉。
+  浮的结果同框。经典模式没有汇总栏，合计就并进状态行（`完成，共 N 个 · 合计 X`）。
+- **入场动画只给"还没画过"的元素**（`painted`）。`render()` 每次都重建整个
+  `innerHTML`，不加这个标记的话，排序、展开、来新结果都会让整墙重放一次动画。
+  非经典视图的 `pushRow` 直接把 `painted` 置为 `true`，一帧动画都不做。
+- **动画挂在 `html.classic .card.enter` 上**，并且 `@media (prefers-reduced-motion:
+  reduce)` 里关掉。原来表格那套 `tbody tr.enter` / `@keyframes row-enter` 已经删掉
+  ——经典模式改卡片墙之后它永远匹配不到可见行，是死代码。
 
 **一个踩过的坑**：`.summary { display: flex }` 和浏览器默认的 `[hidden]
 { display: none }` 优先级一样，但作者样式永远压过默认样式——所以只写 `hidden`
 属性是藏不住的，汇总栏会在开扫之前就顶着"应用 0 / 总占用 0 B"露出来。
 `styles.css` 顶部因此加了一条 `[hidden] { display: none !important; }`。
+（这条现在更关键了：三个视图全靠 `hidden` 切换。）
 
-**改前端的两步验证**，都不能省：
+### 8.3 前端的验证（桩 / 截图 / 端到端）
 
-1. `node tools/ui_harness.js` —— 拿一个几十行的 DOM 桩把 `ui/main.js` 跑起来，喂进
-   假事件，断言的是**调用次数和时序**（揭示队列搬了几条、`row.painted` 有没有防住
-   重放、关掉经典模式时队列是不是立刻放完、发给后端的请求长什么样）。39 项，半秒
-   跑完，不需要 npm。这些行为用肉眼点几下很难测全，用截图又只能验"长什么样"、
-   验不了"跑了几次"。
-2. `python tools/preview_ui.py <输出目录>` —— 生成一份带假数据的静态预览页（把
-   `ui/` 整个抄过去，再塞一个假的 `window.__TAURI__`），浏览器打开即可看效果。
+**三层验证，都不能省**：
+
+1. `node tools/ui_harness.js` —— 拿一个几百行的 DOM 桩把 `ui/main.js` 跑起来，喂进
+   假事件，断言的是**调用次数和时序**：揭示队列搬了几条、`painted` 有没有防住重放、
+   卡片墙自动跟随的目标有没有对齐到整行、底部内边距补得对不对、进工具模式是不是
+   立刻探测后端、发给后端的请求长什么样。**75 项，半秒跑完，不需要 npm**，已接进
+   CI 的 lint job。这些行为用肉眼点几下很难测全，用截图又只能验"长什么样"、
+   验不了"跑了几次和什么顺序"。
+   - 它抓到过一个**真 bug**：在途的后端探测会在扫描失败之后把"未确定"盖回成一个
+     后端名（见 §8.1 的 `backendEpoch`）。这种竞态在真机上要凑时机才复现，
+     桩里只要控制 promise 的 resolve 顺序就能稳定打出来。
+2. `python tools/preview_ui.py <输出目录> [picker|classic|tool] [条数]` —— 生成一份带
+   假数据的静态预览页（把 `ui/` 整个抄过去，再塞一个假的 `window.__TAURI__`），
+   无头浏览器截图。不给视图名就三个视图各出一张。
    桩**不能替代**截图：真实 DOM 的布局和 CSS 层叠它完全看不见，`[hidden]` 被
    `.summary { display: flex }` 压掉那个 bug 就只有截图才发现得了。
 
-两个坑写在 `preview_ui.py` 的注释里：桩必须整体包在 IIFE 里（经典脚本的顶层
+三个坑写在 `preview_ui.py` 的注释里：① 桩必须整体包在 IIFE 里（经典脚本的顶层
 `class Channel {}` 会占住全局词法作用域的名字，而 `main.js` 顶层写的正是
 `const { invoke, Channel } = …`，会以"Identifier 'Channel' has already been
-declared"整体解析失败，表现只是"点了按钮没反应"）；Python 的 `True` / `False`
-不是 JavaScript 字面量。
+declared"整体解析失败，表现只是"点了按钮没反应"）；② Python 的 `True` / `False`
+不是 JavaScript 字面量；③ **无头截图会把视口放大**，这是最坑的一个：
+`--window-size=1280,800` 下页面看到的是 1264×705，而截图输出是 1280×800，
+并且页面**收不到 resize 事件**（`innerHeight` 始终 705，`ResizeObserver` 也不触发）
+——是合成层重排，不是布局事件。后果是截图那一刻最大滚动量变小、`scrollTop` 被夹回，
+顶部凭空切掉 95px。**这是截图工具的假象，不是前端 bug**：同一时刻的 `--dump-dom`
+显示 `scroll=706/706`、对齐残差 0。所以经典模式截图前先**滚到顶**
+（`scrollTop=0` 不会被夹取，状态可确定），并用它当独立判据量出行顶边落在
+`56 / 186 / 316 / 446 / 576 / 706`。
 
 想直接验画质差异时，还有一招：同一份页面分别用两个版本的背景图渲染、无头截图、
-逐像素差分。这比看裸图的 PSNR 靠谱得多（见 §8.1 里那张表的结论）。
+逐像素差分。这比看裸图的 PSNR 靠谱得多（见本节上面那张表的结论）。
 
 **端到端要另起一个**：`tools/gui_smoke.py`（手动，Windows）。它真的去点窗口，
 验证「Tauri command + Channel + 前端渲染」这条链，而不是只验编译得过。用法见
-README。它有两处被经典模式撞出来的坑，改前端时要一起想着：
+README。改成三视图之后它也跟着重写了，几处要点：
 
 - **必须硬性置顶**（`SetWindowPos(HWND_TOPMOST)`）。脚本抓的是**屏幕**，只调
   `SetForegroundWindow` 的话，Windows 允许前台进程拒绝让出前台权，从终端里跑
   经常静默失败，窗口还压在终端后面——于是抓回一整张终端内容，还会因为终端里的
   蓝色链接文字匹配上强调色而"找到"一个假按钮。症状是"整窗都是同一种深灰"，
   非常难判断。收尾有 `unpin()` 取消置顶。
-- **强调色有两套**（`THEMES`）：经典模式默认开启，按钮是中国红 `#c31c12`，
-  而脚本原来写死的是深色主题的 `#4f8ff7`。不改的话只聚得出窗口边框那一小簇，
-  再把它当按钮，后面每一步都跟着错。两套都试，靠**簇宽 >= 60px** 过滤掉窗口边框
-  和品牌文字。
-- **输入框不用像素找，用 Tab 键**。经典模式的输入框是半透明白叠在喜报上，色值
-  随背景浮动，而工具条面板在同一行上会飘到和它只差 3 的地方——容差收到 2 都还能
-  匹配出 x 8..717 一整片，`min(hits)+10` 会落到面板上，输进去的路径直接丢掉。
-  改用键盘：`#root-input` 是 DOM 里第一个可聚焦元素，清掉焦点再按一次 Tab 必中。
+- **找按钮的判据从"取最右一簇"改成"够宽 且 填充率 >= 0.5"**。选择页是深色，
+  按钮是蓝的 `#4f8ff7`（旧注释里"经典模式的按钮是中国红 `#c31c12`"已经过时——
+  中国红现在只出现在卡片悬停描边上，页面上没有它的实心块）。而同一个蓝还出现在
+  标题文字（`.picker-title`）和选中那张模式卡的 1px 描边上，单看宽度或位置都挑不准：
+  实测标题文字的填充率约 0.35、模式卡描边约 0.03，只有按钮是实心的约 0.8。
+  所以判据是"填充率"，不是"最右"。
+- **模式用键盘选**：`Tab` 进单选钮组（一组单选钮里只有被选中的那个是 tab stop，
+  DOM 里第一个可聚焦元素就是它），`Down` 在组内切到工具模式。按像素找一个十几像素、
+  还跟背景撞色的圆点基本靠运气。
+- **工具栏的目录输入框也用键盘**：`Tab` 两次（返回按钮 → 输入框）。**不按像素找**：
+  它的底色 `--field` 和工具栏面板 `--panel` 只差 11 个色阶，容差收到 2 都分不开。
+  代价是**绑定了 tab 顺序**——工具栏里在输入框之前新增可聚焦元素时，这个次数要跟着加。
+- **`--root` 只对工具模式有效**：选择页和经典模式都没有目录输入框（用户的要求），
+  所以第一轮扫描永远是全盘；`--root` 的用法是等第一轮扫完，把路径打进工具栏输入框、
+  回车重扫，另存一张 `*_filtered.png`。经典模式里给了只会打印一句提醒。
+- **`CEFSCAN_SMOKE_EXPAND` 只对工具模式有效**：经典模式里点卡片是在资源管理器里
+  定位，冒烟测试不该真去开一个窗口。
 - **抓帧要能重试**。刚置顶之后 DWM 有一小段时间还没合成完，`BitBlt` 会抓回一帧
   不完整的画面——实测遇到过"表格和复选框都在、唯独按钮那块是空的"。这种帧偶发，
-  所以 `locate_button` 失败时会重新聚焦再抓一次（最多 3 次），而不是直接判失败。
+  所以 `locate_start_button` 失败时会重新聚焦再抓一次（最多 3 次），而不是直接判失败。
 
+- **必须硬性置顶**（`SetWindowPos(HWND_TOPMOST)`）。脚本抓的是**屏幕**，只调
+  `SetForegroundWindow` 的话，Windows 允许前台进程拒绝让出前台权，从终端里跑
+  经常静默失败，窗口还压在终端后面——于是抓回一整张终端内容，还会因为终端里的
+  蓝色链接文字匹配上强调色而"找到"一个假按钮。症状是"整窗都是同一种深灰"，
+  非常难判断。收尾有 `unpin()` 取消置顶。
+- **找按钮的判据从"取最右一簇"改成"够宽 且 填充率 >= 0.5"**。选择页是深色，
 **路径列折叠**：按**分隔符切段**折叠，不是按字符数切——前面只留「根 + 3 层目录」
 （`PATH_HEAD_SEGMENTS`），中间省略号，后面只留文件名，这样尾部一定是完整的文件名：
 ```
