@@ -159,11 +159,21 @@ impl Default for ScanOptions {
     }
 }
 
+/// 遍历后端的展示名。
+///
+/// 不叫 "filesystem"：用户视角里"后端"就是"谁去找的"，而遍历是 cefscan 自己干的活，
+/// 所以直接叫 cefscan。索引后端则报**实际探测到的服务名**（如 Everything），
+/// 而不是笼统的 "index"——"自动"这个选项要可信，就得让人看见它到底选了谁。
+///
+/// 这是 [`ScanStats::backend`]、[`ScanNotice::backend`] 和 `scan::detect_backend()`
+/// 的唯一取值来源，改名只需动这一处。
+pub const FILESYSTEM_BACKEND: &str = "cefscan";
+
 /// 一次扫描的汇总信息。
 #[derive(Debug, Clone, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub struct ScanStats {
-    /// 实际使用的后端名。
+    /// 实际使用的后端名，取值见 [`FILESYSTEM_BACKEND`] 或索引服务的名字。
     pub backend: &'static str,
     /// 遍历到的目录数。
     pub dirs_scanned: u64,

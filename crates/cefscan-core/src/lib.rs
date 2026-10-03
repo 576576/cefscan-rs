@@ -33,7 +33,8 @@ pub mod walk;
 
 pub use error::{ScanError, ScanResult};
 pub use model::{
-    AppInfo, AppKind, Backend, Candidate, CandidateKind, ScanNotice, ScanOptions, ScanStats,
+    AppInfo, AppKind, Backend, Candidate, CandidateKind, FILESYSTEM_BACKEND, ScanNotice,
+    ScanOptions, ScanStats,
 };
 pub use naming::display_name;
-pub use scan::{ScanOutcome, scan, scan_streaming, sort_apps};
+pub use scan::{ScanOutcome, detect_backend, scan, scan_streaming, sort_apps};

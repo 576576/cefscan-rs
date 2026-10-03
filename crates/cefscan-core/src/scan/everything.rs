@@ -51,6 +51,32 @@ const LIST_HEADER_SIZE: usize = 7 * size_of::<u32>();
 const ITEM_SIZE: usize = 3 * size_of::<u32>();
 const MAX_ITEM_COUNT: usize = 1_000_000;
 
+/// 索引服务是否在场。
+///
+/// 只看隐藏窗口在不在，**不发查询**。这是刻意为之：真发一次查询要等回复或等
+/// `index_timeout`（默认 1.5 s），而 GUI 的工具栏 chip 每次进工具模式/被点一下
+/// 都要刷一次，卡 1.5 s 是不可接受的。
+///
+/// 代价是它只回答"服务在不在"，不保证那次查询一定成功——窗口在但 Everything
+/// 卡死时这里照样报 true。让 UI 探针复现一次真实查询的成败，就得让 UI 等一次
+/// 真实查询，这个取舍不划算。
+pub fn is_service_available() -> bool {
+    find_service_window().is_some()
+}
+
+/// 按兼容性顺序找 Everything 的隐藏窗口。
+///
+/// 探测（[`is_service_available`]）和真查询（[`query_candidates`]）都走这里，
+/// 保证"报得出来的服务"和"问得到的服务"永远是同一个。
+fn find_service_window() -> Option<HWND> {
+    EVERYTHING_WINDOW_CLASSES.iter().find_map(|class| {
+        let class = to_wide_z(class);
+        // SAFETY: 类名 NUL 结尾（`to_wide_z`）；窗口不存在时返回 null，由 find_map 跳过。
+        let handle = unsafe { FindWindowW(class.as_ptr(), ptr::null()) };
+        (!handle.is_null()).then_some(handle)
+    })
+}
+
 /// 查询 Everything。成功时连服务名一起返回，供结果里展示。
 pub fn query_candidates(options: &ScanOptions) -> io::Result<(Vec<Candidate>, &'static str)> {
     let timeout = options.index_timeout.max(Duration::from_millis(100));
@@ -242,20 +268,12 @@ struct ReplyWindow {
 
 impl ReplyWindow {
     fn create(reply: Arc<Mutex<Option<Vec<u8>>>>) -> io::Result<Self> {
-        // SAFETY: 类名与标题都是 NUL 结尾；找不到窗口时返回 null，由调用方处理。
-        let everything = EVERYTHING_WINDOW_CLASSES
-            .iter()
-            .find_map(|class| {
-                let class = to_wide_z(class);
-                let handle = unsafe { FindWindowW(class.as_ptr(), ptr::null()) };
-                (!handle.is_null()).then_some(handle)
-            })
-            .ok_or_else(|| {
-                io::Error::new(
-                    io::ErrorKind::NotFound,
-                    "Everything is not running (or the Lite build without IPC is installed)",
-                )
-            })?;
+        let everything = find_service_window().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::NotFound,
+                "Everything is not running (or the Lite build without IPC is installed)",
+            )
+        })?;
 
         let class = to_wide_z(REPLY_WINDOW_CLASS);
         // SAFETY: WNDCLASSEXW 各字段一致，lpfnWndProc 指向下面定义的窗口过程。

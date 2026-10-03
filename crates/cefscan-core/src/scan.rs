@@ -8,7 +8,9 @@ use std::time::Instant;
 
 use crate::error::ScanError;
 use crate::group::{DetectedApp, group};
-use crate::model::{AppInfo, Backend, Candidate, ScanNotice, ScanOptions, ScanStats};
+use crate::model::{
+    AppInfo, Backend, Candidate, FILESYSTEM_BACKEND, ScanNotice, ScanOptions, ScanStats,
+};
 use crate::process::{self, ProcessKey};
 use crate::size::sizes_parallel_each;
 use crate::walk::walk;
@@ -159,12 +161,40 @@ fn deduplicated_total(apps: &[AppInfo]) -> u64 {
     total
 }
 
-/// 遍历后端的展示名。
+/// 只回答"这次扫描会选哪个后端"，**不扫描、不查询索引服务**。
 ///
-/// 不再叫 "filesystem"：对用户来说"后端"就是"谁去找的"，遍历后端就是 cefscan
-/// 自己，所以直接叫 cefscan。索引后端则显示**实际探测到的服务名**（如 Everything），
-/// 而不是笼统的 "index"。
-const FILESYSTEM_BACKEND: &str = "cefscan";
+/// 和 [`scan_streaming`] 的 `on_notice` 是一回事，区别只在时机：那个要等真开扫
+/// （`discover()` 挑完后端）才知道，这个在**开扫之前**就能问。GUI 靠它把工具栏上
+/// 那个"自动"立刻变成一个具体的后端名——进工具模式时刷一次，用户点一下 chip
+/// 再刷一次，都不该等用户点"开始扫描"。
+///
+/// 所以它必须便宜：索引探测只看 Everything 的窗口在不在（`FindWindowW`），
+/// 不发查询、不等 `index_timeout`。代价是它只承诺"会选谁"，不保证那次查询一定
+/// 成功；真开扫时后端仍可能超时并（在 `Auto` 下）回落到遍历。
+///
+/// 必须与 `discover()` 的选择策略保持一致，否则 chip 上显示的和结果里报的会是两个东西。
+pub fn detect_backend(options: &ScanOptions) -> &'static str {
+    match options.backend {
+        // 遍历后端不依赖任何外部条件，永远可用。
+        Backend::Filesystem => FILESYSTEM_BACKEND,
+        // "自动"和"只用索引"的差别只在**失败之后**：前者回落遍历，后者报错。
+        // 挑后端那一刻两者看到的可用性判断是同一个，所以名字也一样。
+        Backend::Auto | Backend::Index => index_service_name().unwrap_or(FILESYSTEM_BACKEND),
+    }
+}
+
+/// 索引服务的展示名；服务不在场时返回 `None`。
+///
+/// "有没有索引服务"的唯一判据，探测和真查询共用同一份窗口类名列表。
+#[cfg(all(feature = "everything", target_os = "windows"))]
+fn index_service_name() -> Option<&'static str> {
+    everything::is_service_available().then_some(everything::SERVICE_NAME)
+}
+
+#[cfg(not(all(feature = "everything", target_os = "windows")))]
+fn index_service_name() -> Option<&'static str> {
+    None
+}
 
 /// 取得候选文件。索引后端失败时按策略回落。
 fn discover(options: &ScanOptions) -> Result<(Vec<Candidate>, &'static str, u64), ScanError> {
@@ -218,6 +248,7 @@ mod tests {
     use super::*;
     use std::fs;
     use std::path::Path;
+    use std::time::Duration;
 
     struct Fixture {
         root: PathBuf,
@@ -347,5 +378,58 @@ mod tests {
             matches!(error, ScanError::BothBackendsFailed { .. }),
             "期望 BothBackendsFailed，实得 {error}"
         );
+    }
+
+    /// 探测（`detect_backend`）和真扫描（`ScanStats::backend`）必须报同一个名字。
+    ///
+    /// 这是 GUI 那条"chip 上写着自动（cefscan），结果汇总里也写着 cefscan"的
+    /// 依据。两者分头实现，一旦策略漂移，用户会看到自相矛盾的两个后端名。
+    #[test]
+    fn probe_and_scan_report_the_same_backend() {
+        let fixture = fixture("probe-agrees");
+        write_app(&fixture.root, "app");
+
+        let options = options_for(&fixture.root, Backend::Filesystem);
+        let outcome = scan(&options).unwrap();
+
+        assert_eq!(detect_backend(&options), FILESYSTEM_BACKEND);
+        assert_eq!(outcome.stats.backend, detect_backend(&options));
+    }
+
+    /// 没有索引服务可用时，"自动"的探测结果必须是遍历后端。
+    #[cfg(not(all(feature = "everything", target_os = "windows")))]
+    #[test]
+    fn probe_reports_cefscan_for_auto_without_a_service() {
+        assert_eq!(
+            detect_backend(&ScanOptions {
+                backend: Backend::Auto,
+                ..ScanOptions::default()
+            }),
+            FILESYSTEM_BACKEND
+        );
+    }
+
+    /// 探测**不能**等索引查询。
+    ///
+    /// 把 `index_timeout` 设成 30 s：如果哪天有人把探测改成"真发一次查询再等回复"，
+    /// 在有 Everything 的机器上这里会挂 30 s 然后失败。窗口探测（`FindWindowW`）
+    /// 是毫秒级的，所以 1 s 的上限足够宽松，不会因为机器慢而误报。
+    #[test]
+    fn probe_never_waits_on_the_index_timeout() {
+        let options = ScanOptions {
+            backend: Backend::Auto,
+            index_timeout: Duration::from_secs(30),
+            ..ScanOptions::default()
+        };
+
+        let started = Instant::now();
+        let name = detect_backend(&options);
+        let elapsed = started.elapsed();
+
+        assert!(
+            elapsed < Duration::from_secs(1),
+            "探测花了 {elapsed:?}，说明它在等一次真实的索引查询"
+        );
+        assert!(!name.is_empty(), "后端名不能是空串");
     }
 }
