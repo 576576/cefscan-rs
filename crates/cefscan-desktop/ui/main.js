@@ -373,11 +373,13 @@ function resetFollow() {
 
 function setScanning(value) {
   scanning = value;
-  for (const node of [startButton, scanButton]) {
-    node.disabled = value;
-    node.textContent = value ? '扫描中…' : '开始扫描';
-  }
-  // 图标按钮不能走上面那个循环——`textContent = …` 会把图标本身抹掉。
+  // 只有工具模式那个按钮才是"扫描"动作：文案在"开始扫描 / 扫描中…"之间切、扫描时禁用。
+  scanButton.disabled = value;
+  scanButton.textContent = value ? '扫描中…' : '开始扫描';
+  // 选择页那个按钮只是"进入某个视图"（进去不一定会扫，见 bootstrap），所以文案固定是
+  // "进入"、**扫描中也不禁用**——否则扫到一半从视图里点"返回"，就再也进不去了。
+  // 扫描中重复点是安全的：那个监听自己会 `if (rows.length > 0 || scanning) return`。
+  // 图标按钮不能走 `textContent = …` —— 会把图标本身抹掉，所以单独设 disabled。
   classicRefresh.disabled = value;
 }
 

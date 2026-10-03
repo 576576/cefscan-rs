@@ -10,7 +10,9 @@
   </head>
   <body>
     <div id="app">
-      <!-- ① 初始选择页：两个模式选项在上、开始扫描按钮在下，构成一个向下的三角。 -->
+      <!-- ① 初始选择页：两个模式选项在上、进入按钮在下，构成一个向下的三角。
+           按钮叫「进入」而不是「开始扫描」——它只是把人送进选中的那个视图，
+           进去之后扫不扫得看情况（已有结果就直接复用，工具模式只切视图不扫）。 -->
       <section id="picker" class="picker">
         <div class="picker-panel">
           <h1 class="picker-title">cefscanw</h1>
@@ -29,7 +31,7 @@
             </label>
           </div>
 
-          <button id="start-button" type="button">开始扫描</button>
+          <button id="start-button" type="button">进入</button>
           <p id="picker-status" class="picker-status status-text"></p>
         </div>
       </section>
