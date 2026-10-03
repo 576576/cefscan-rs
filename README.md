@@ -125,7 +125,8 @@ cefscan --format ndjson | jq -r .path     # 流式消费
   不必等点了"扫描"才知道。GUI 不提供后端选择：有索引服务时用索引严格优于遍历，没有时
   想选也选不上，选择项本身是伪需求。需要强制指定后端请用 CLI 的 `--backend`。
 - **开始扫描**（或在输入框按回车）：扫描过程中结果**逐条流式出现**，按占用从大到小排。
-- 表格列：图标 / 名称 / 类型 / 占用 / 运行 / 路径。点表头可切换排序。
+- 表格列：图标 / 名称 / 类型 / 占用 / 运行 / 路径。点表头可切换排序（**只影响这张表**，
+  经典页的卡片顺序不受影响——卡片墙永远按"扫描发现顺序"排）。
   - **名称**是从路径启发式推导的可读应用名（`...\Microsoft VS Code\Code.exe` → `Microsoft VS Code`）。
   - **图标**取自系统文件关联，转成内嵌 PNG，不额外依赖任何图标文件。
   - **路径默认折叠**成「前面 3 层目录 + … + 文件名」
@@ -142,10 +143,13 @@ cefscan --format ndjson | jq -r .path     # 流式消费
 只切视图，**不打断正在跑的扫描**。因为「进入」只是导航，所以扫描中它**不禁用**——
 不然扫到一半点「返回」就再也进不去了。
 
+**两个视图的顺序各管各的**：卡片墙按"扫描发现顺序"排（新卡片追加在末尾），工具页点表头
+排序只在表格上生效，**不会改变卡片墙的相对位置**。
+
 改前端时的三步验证，都不需要起 GUI：
 
 1. `node tools/ui_harness.js` —— 用 DOM 桩跑 `ui/main.js`，断言视图切换、后端探测时机、
-   卡片墙对齐数学、切模式是否复用结果、卡片密度与出场速度上限、发给后端的请求形状等 118 项行为（不需要 npm）。
+   卡片墙对齐数学、切模式是否复用结果、卡片密度与出场速度上限、发给后端的请求形状等 124 项行为（不需要 npm）。
 2. `python tools/preview_ui.py <输出目录> [picker|classic|tool] [条数]` —— 生成一份带假
    数据的静态预览页（把 `ui/` 整个抄过去，再塞一个假的 `window.__TAURI__`），
    浏览器打开即可看效果；不给视图名就三个视图各出一张。
@@ -159,7 +163,7 @@ cefscan --format ndjson | jq -r .path     # 流式消费
 cargo test --workspace              # 单测 + doctest
 cargo fmt --all --check             # 格式
 cargo clippy --workspace --all-targets -- -D warnings
-node tools/ui_harness.js            # ui/main.js 的逻辑（118 项，不需要 npm）
+node tools/ui_harness.js            # ui/main.js 的逻辑（124 项，不需要 npm）
 python tools/check_icons.py         # 图标齐全且为 RGBA
 ```
 
