@@ -1,38 +1,48 @@
 #!/usr/bin/env python3
 """cefscanw 的端到端冒烟测试（Windows，仅手动运行，不进 `cargo test`）。
 
-它会真的去点 GUI：找窗口 → 定位控件 → 输入限定目录 → 点「开始扫描」→ 定时截屏。
+它会真的去点 GUI：找窗口 → 在初始选择页选模式 → 点「开始扫描」→ 定时截屏。
 用来验证「Tauri command + Channel + 前端渲染」这条链路确实通，而不仅仅是能编译。
 
 用法::
 
     cargo build --release
     ./target/release/cefscanw.exe &
-    python tools/gui_smoke.py out.png C:/Users/<you> 6 20
+    python tools/gui_smoke.py out.png --mode classic 6 20
+    python tools/gui_smoke.py out.png --mode tool --root C:/Users/<you> 6 20
 
-后两个参数是截屏时刻（秒），可给多个。脚本不会关掉 cefscanw，自己收尾。
+`times` 是截屏时刻（秒），可给多个；脚本不会关掉 cefscanw，自己收尾。
 
-设 `CEFSCAN_SMOKE_EXPAND=1` 可以额外验证「点整行展开路径」：截屏结束后点第一行
-数据行，再存一张 `*_expanded.png`。
+**初始页没有目录输入框**（用户定的：只有两个模式选项 + 一个开始扫描按钮），
+所以第一轮扫描永远是全盘。想限定目录得进工具模式再输一次——`--root` 就是干这个的：
+工具模式下等第一轮扫完，把路径打进工具栏输入框、回车重扫，另存一张 `*_filtered.png`。
+经典模式没有输入框，给了 `--root` 也只会打印一句提醒。
 
-设计要点：**不写死控件坐标**，而是从像素里认控件，这样改布局也不用改脚本：
+设 `CEFSCAN_SMOKE_EXPAND=1` 可以额外验证「点整行展开路径」，**只对工具模式有效**：
+经典模式里点卡片是在资源管理器里定位，冒烟测试不该真去开一个窗口。
+
+设计要点：**不写死控件坐标**，控件靠像素认、模式靠键盘选：
 
 * 找窗口：`EnumWindows` + 标题前缀。
 * 把窗口提到最前：`SetWindowPos(HWND_TOPMOST)`。**只调 `SetForegroundWindow` 不够**，
   见 `focus()` 的注释——那是个会让整个测试静默跑偏的坑。
-* 找「开始扫描」按钮：在窗口矩形内找强调色像素，按 x 聚类后取**最右**一簇。
-  强调色有两套（深色主题 `#4f8ff7` / 经典模式 `#c31c12`，后者是默认），逐个试，
-  哪套能聚出一簇足够宽的方块就用哪套。
-* 找输入框：**不用像素找**，用 Tab 键把焦点送进去。理由是实测出来的：经典模式的
-  输入框是半透明白叠在喜报上，色值随背景浮动，而工具条面板在渐变上会飘到和它只差 3
-  的地方——容差收到 2 都还能匹配出 x 8..717 一整片，点下去会落到面板上。
-  而 `#root-input` 是 DOM 里第一个可聚焦元素，Tab 一次必中，与主题、布局、配色全无关。
+* 找「开始扫描」按钮：在窗口矩形内找**实心**强调色方块。选择页是深色主题，所以
+  强调色是蓝的 `#4f8ff7`。这里不能只看颜色就取"最右一簇"（那是加选择页之前的做法）：
+  同一个蓝还出现在标题文字（`.picker-title`）和选中那张模式卡的描边上。判据改成
+  「够宽 **且** 填充率够高」——标题文字约 0.35、模式卡描边约 0.03，而按钮是实心的约 0.8。
+* 选模式：**用键盘**。选择页里第一个可聚焦元素就是那组单选钮（一组单选钮里只有被
+  选中的那个是 tab stop），`Tab` 一次必中；`Down` 在组内切到工具模式。比按像素找
+  单选钮稳得多，也更接近真实操作。
+* 工具栏的目录输入框：同样用键盘（`Tab` 两次：返回按钮 → 输入框）。**不按像素找**：
+  它的底色 `--field` 和工具栏面板 `--panel` 只差 11 个色阶，容差收到 2 都分不开。
+  代价是绑定了 tab 顺序——工具栏里在输入框之前新增可聚焦元素时，这个次数要跟着加。
 * 输入文字：`SendInput` + `KEYEVENTF_UNICODE`，绕开键盘布局。
 * 截屏：GDI `BitBlt`，手写 PNG 编码 —— 本机没有 Pillow，`Add-Type` 也被安全策略拦了。
 
-已知脆弱点：颜色/尺寸若大改需要同步更新 `THEMES` 里的常量。
+已知脆弱点：颜色/尺寸若大改需要同步更新 `PICKER_ACCENT` 等常量。
 """
 
+import argparse
 import ctypes
 import ctypes.wintypes as wintypes
 import os
@@ -52,6 +62,8 @@ KEYEVENTF_UNICODE = 0x0004
 KEYEVENTF_KEYUP = 0x0002
 INPUT_KEYBOARD = 1
 VK_TAB = 0x09
+VK_RETURN = 0x0D
+VK_DOWN = 0x28
 
 HWND_TOPMOST = -1
 HWND_NOTOPMOST = -2
@@ -59,25 +71,24 @@ SWP_NOSIZE = 0x0001
 SWP_NOMOVE = 0x0002
 SWP_SHOWWINDOW = 0x0040
 
-# 两套主题的强调色（BGRA），对应 ui/styles.css 里的 --accent。
-#
-# 经典模式默认开启，所以不能只认深色那一套：经典模式的按钮是中国红 #c31c12，
-# 拿 #4f8ff7 去找什么都找不到——实测只会聚出窗口边框那一小簇，然后把它当成按钮，
-# 后面每一步都跟着错。色值是实测的，不是从 CSS 推的。
-#
-# 输入框不在这里：它改用 Tab 键定位，理由见文件头。
-THEMES = [
-    ("classic", (18, 28, 195)),  # #c31c12，默认主题
-    ("dark", (247, 143, 79)),  # #4f8ff7
-]
-TOLERANCE = 14
-# 按钮是 100+ px 宽的实心块；窗口边框、品牌文字那几簇都很窄，用宽度区分。
-BUTTON_MIN_WIDTH = 60
+# 初始选择页的强调色（BGRA）。**只有这一套**：选择页是深色的（用户明确要求不铺喜报），
+# 所以它就是 :root 里的 --accent = #4f8ff7。经典模式的中国红 #c31c12 现在只出现在
+# 卡片墙的悬停描边上，页面上没有中国红的实心块，按颜色找按钮找不到它。
+PICKER_ACCENT = (247, 143, 79)  # #4f8ff7
 
-# KIND_COLORS（见 ui/main.js）里各标签底色，BGRA 顺序，用来定位数据行。
+TOLERANCE = 14
+# 按钮是 100+ px 宽的实心块；窗口边框、标题文字那几簇要么窄、要么不实心。
+BUTTON_MIN_WIDTH = 60
+# 实心判据：强调色像素数 / 外接矩形面积。按钮（内含白色文字）实测约 0.8，
+# 而标题文字的笔画只覆盖约 0.35、模式卡那条 1px 描边约 0.03。
+BUTTON_MIN_FILL = 0.5
+
+# KIND_COLORS（见 ui/main.js）里各标签底色，BGRA 顺序，用来定位表格数据行。
 #
 # **刻意不含 unknown `#7f848e`**：它接近中性灰（BGRA 142,132,127），跟界面上
 # 抗锯齿文字的混色像素几乎分不开，收进来会让汇总区那一行也被当成数据行。
+#
+# 这些标签只存在于**工具模式**的表格里；经典模式的卡片墙没有它们。
 TAG_COLORS = [
     (228, 196, 125),  # electron   #7dc4e4
     (230, 169, 90),  # edge       #5aa9e6
@@ -247,92 +258,71 @@ def close_to(pixel, target, tolerance=TOLERANCE):
     )
 
 
-def find_button(pixels, width, region):
-    """找强调色块。按 x 方向聚类，取最右一簇（按钮在输入框右侧）。
+def find_solid_block(pixels, width, region, accent):
+    """找强调色的**实心**方块，返回 ((中心 x, 中心 y), (left, top, right, bottom))。
 
-    两套主题的强调色都试一遍，取第一个能聚出"足够宽"的方块的。用宽度过滤是必要的：
-    窗口边框和品牌文字也会命中同一个颜色，但它们都只有几像素宽。
+    先用 x 方向聚类（间隔 > 6px 算另一簇），再对每簇算「填充率 = 强调色像素数 /
+    外接矩形面积」来挑。**这是「实心」和「描边 / 文字」的分水岭**：选择页上的蓝色
+    同时出现在标题文字和选中那张模式卡的 1px 描边上，单看宽度或位置都挑不准。
+
+    返回 `(None, None)` 表示没找到。
     """
     left, top, right, bottom = region
 
-    for theme, accent in THEMES:
-        columns = {}
-        for y in range(top, bottom):
-            row = y * width * 4
-            for x in range(left, right):
-                index = row + x * 4
-                if close_to(pixels[index : index + 3], accent):
-                    columns.setdefault(x, []).append(y)
+    columns = {}
+    for y in range(top, bottom):
+        row = y * width * 4
+        for x in range(left, right):
+            index = row + x * 4
+            if close_to(pixels[index : index + 3], accent):
+                columns.setdefault(x, []).append(y)
 
-        if not columns:
+    if not columns:
+        return None, None
+
+    xs = sorted(columns)
+    clusters = [[xs[0]]]
+    for x in xs[1:]:
+        if x - clusters[-1][-1] <= 6:  # 间隔 > 6px 视为另一簇
+            clusters[-1].append(x)
+        else:
+            clusters.append([x])
+
+    best = None
+    for cluster in clusters:
+        if len(cluster) < BUTTON_MIN_WIDTH:
             continue
+        ys = [y for x in cluster for y in columns[x]]
+        box_width = cluster[-1] - cluster[0] + 1
+        box_height = max(ys) - min(ys) + 1
+        fill = len(ys) / (box_width * box_height)
+        print(
+            f"  强调色簇 x {cluster[0]}..{cluster[-1]} "
+            f"尺寸 {box_width}x{box_height} 填充率 {fill:.2f}"
+        )
+        if fill < BUTTON_MIN_FILL:
+            continue
+        if best is None or box_width > best[0]:
+            best = (box_width, cluster, ys)
 
-        xs = sorted(columns)
-        clusters = [[xs[0]]]
-        for x in xs[1:]:
-            if x - clusters[-1][-1] <= 6:  # 间隔 > 6px 视为另一簇
-                clusters[-1].append(x)
-            else:
-                clusters.append([x])
+    if best is None:
+        return None, None
 
-        print(f"[{theme}] 强调色簇: {[(c[0], c[-1], len(c)) for c in clusters]}")
-
-        # 从右往左找第一个够宽的簇：按钮在最右边，但它右侧可能还有窄簇（状态文字）。
-        for chosen in reversed(clusters):
-            if len(chosen) < BUTTON_MIN_WIDTH:
-                continue
-            ys = [y for x in chosen for y in columns[x]]
-            print(f"[{theme}] 采用最右宽簇: x {chosen[0]}..{chosen[-1]}")
-            return (
-                (chosen[0] + chosen[-1]) // 2,
-                (min(ys) + max(ys)) // 2,
-                (chosen[0], min(ys), chosen[-1], max(ys)),
-            )
-
-    return None
-
-
-def focus_input(button_box, button_y):
-    """把键盘焦点送进输入框。
-
-    为什么不按像素找输入框：经典模式的输入框底色是 `rgba(255,255,255,0.72)` 叠在
-    喜报上，最终色值取决于背景，而且工具条面板（`rgba(255,250,242,0.8)`）在同一行上
-    会飘到和它只差 3 的地方。实测容差收到 2 也还能匹配出 x 8..717 一整片，
-    `min(hits)+10` 会落到面板上，输进去的路径直接丢掉。
-
-    改用键盘：`#root-input` 是 DOM 里第一个可聚焦元素（在它之前只有一个 `.brand`
-    span），所以先把焦点清干净、再按一次 Tab 必定落在输入框上。与主题、布局、配色
-    都无关，而且比像素匹配更接近用户真实操作。
-
-    清焦点的办法是点一下工具条的空白处——位置从已经找到的按钮外接矩形推出来
-    （按钮右侧 60px），不写死坐标。
-    """
-    _left, _top, right, _bottom = button_box
-    click(right + 60, button_y)
-    time.sleep(0.2)
-
-    press_key(VK_TAB)
-    time.sleep(0.2)
-
-
-def press_key(vk):
-    """敲一次普通按键（按下 + 抬起）。"""
-    for flags in (0, KEYEVENTF_KEYUP):
-        item = Input()
-        item.type = INPUT_KEYBOARD
-        item.union.ki = KeybdInput(vk, 0, flags, 0, None)
-        user32.SendInput(1, ctypes.byref(item), ctypes.sizeof(Input))
-        time.sleep(0.03)
-    time.sleep(0.1)
+    _, cluster, ys = best
+    box = (cluster[0], min(ys), cluster[-1], max(ys))
+    print(f"  采用最宽实心簇: x {cluster[0]}..{cluster[-1]} y {box[1]}..{box[3]}")
+    return ((cluster[0] + cluster[-1]) // 2, (min(ys) + max(ys)) // 2), box
 
 
 def find_first_row(pixels, width, region, min_hits=40):
-    """找第一条数据行。用「类型」列的标签底色定位——它在表格里独一无二。
+    """找表格第一条数据行。用「类型」列的标签底色定位——它在表格里独一无二。
 
     要求一行里至少有 `min_hits` 个匹配像素，这样才不会被应用图标里偶合的
     颜色骗到（图标只有 18px，一个标签的底色有几十像素宽）。
     从工具条下方（+90px）开始扫，避开工具条和汇总区的文字。
     返回标签中心 (x, y)；找不到返回 None。
+
+    **只对工具模式有意义**：这些标签在经典模式的卡片墙里根本不存在。
     """
     left, top, right, bottom = region
     for y in range(top + 90, bottom):
@@ -409,6 +399,17 @@ def type_text(text):
         time.sleep(0.02)
 
 
+def press_key(vk):
+    """敲一次普通按键（按下 + 抬起）。"""
+    for flags in (0, KEYEVENTF_KEYUP):
+        item = Input()
+        item.type = INPUT_KEYBOARD
+        item.union.ki = KeybdInput(vk, 0, flags, 0, None)
+        user32.SendInput(1, ctypes.byref(item), ctypes.sizeof(Input))
+        time.sleep(0.03)
+    time.sleep(0.1)
+
+
 VK_CONTROL = 0x11
 VK_A = 0x41
 
@@ -433,34 +434,84 @@ def select_all():
 # ---------------------------------------------------------------- 主流程
 
 
-def locate_button(hwnd, region, attempts=3):
-    """抓帧并找按钮，失败就重新聚焦再抓一次。
+def locate_start_button(hwnd, region, attempts=3):
+    """抓帧并找「开始扫描」按钮，失败就重新聚焦再抓一次。
 
     为什么要重试：刚把窗口置顶之后，DWM 有一小段时间还没合成完，`BitBlt` 抓回来的是
-    一帧**不完整**的画面——实测遇到过"表格和复选框都在、唯独按钮那一块是空的"，
-    于是 `find_button` 报找不到。这种帧是偶发的（同一个状态紧接着再跑一次就正常），
-    所以值得重试，而不是直接判失败。
+    一帧**不完整**的画面——实测遇到过"面板和文字都在、唯独按钮那一块是空的"，
+    于是报找不到。这种帧是偶发的（同一个状态紧接着再跑一次就正常），所以值得重试，
+    而不是直接判失败。
     """
     for attempt in range(1, attempts + 1):
         width, _height, pixels = capture()
-        button = find_button(pixels, width, region)
+        button, box = find_solid_block(pixels, width, region, PICKER_ACCENT)
         if button is not None:
-            return button, width, pixels
+            return button, box, width, pixels
         if attempt < attempts:
-            print(f"第 {attempt} 次没找到按钮，重新聚焦再抓一帧")
+            print(f"第 {attempt} 次没找到开始按钮，重新聚焦再抓一帧")
             focus(hwnd)
             time.sleep(0.8)
-    return None, None, None
+    return None, None, None, None
 
 
-def main():
-    if len(sys.argv) < 3:
-        print(__doc__)
-        return 2
+def choose_mode(mode):
+    """在初始选择页把模式选好（键盘操作，理由见文件头）。
 
-    output = sys.argv[1]
-    root = sys.argv[2]
-    waits = [int(value) for value in sys.argv[3:]] or [20]
+    选择页的 DOM 顺序是 [经典单选钮, 工具单选钮, 开始扫描]，而一组单选钮里只有被
+    选中的那个是 tab stop，所以：
+    * 经典（默认选中）：什么都不用做；
+    * 工具：`Tab` 进组 → `Down` 在组内切到工具。
+
+    用键盘而不是按像素找单选钮：那个圆点只有十几像素，配色还跟背景接近，按像素找
+    基本靠运气。
+    """
+    press_key(VK_TAB)
+    if mode == "tool":
+        press_key(VK_DOWN)
+    time.sleep(0.25)
+
+
+def type_root_and_rescan(root):
+    """工具模式专用：把路径打进工具栏输入框并回车重扫。
+
+    焦点用键盘送进去：从"什么都没聚焦"出发，工具视图里的 tab 顺序是
+    [返回按钮, 目录输入框, 后端 chip, 开始扫描]，所以两次 `Tab` 落在输入框上。
+
+    回车能直接触发扫描：`#root-input` 上有 Enter 的 keydown 监听（见 main.js）。
+    """
+    press_key(VK_TAB)  # 返回按钮
+    press_key(VK_TAB)  # 目录输入框
+    select_all()
+    type_text(root)
+    time.sleep(0.3)
+    press_key(VK_RETURN)
+
+
+def parse_args(argv):
+    parser = argparse.ArgumentParser(
+        description="cefscanw 端到端冒烟测试",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument("output", help="截图输出路径（.png）")
+    parser.add_argument("times", nargs="*", type=int, help="截屏时刻（秒），可给多个")
+    parser.add_argument(
+        "--mode",
+        choices=("classic", "tool"),
+        default=os.environ.get("CEFSCAN_SMOKE_MODE", "classic"),
+        help="在初始选择页选哪个模式（默认 classic，也可用 CEFSCAN_SMOKE_MODE 指定）",
+    )
+    parser.add_argument(
+        "--root",
+        default=None,
+        help="工具模式下额外限定一次目录并重扫（经典模式没有输入框，会被忽略）",
+    )
+    return parser.parse_args(argv)
+
+
+def main(argv=None):
+    args = parse_args(argv if argv is not None else sys.argv[1:])
+    output = args.output
+    waits = args.times or [20]
 
     user32.SetProcessDPIAware()
 
@@ -474,24 +525,23 @@ def main():
     region = window_region(hwnd)
     print(f"窗口矩形: {region}")
 
-    button, width, pixels = locate_button(hwnd, region)
+    # ① 初始选择页：先确认它真的画出来了（按钮在不在、是不是实心块）。
+    button, box, width, pixels = locate_start_button(hwnd, region)
     if button is None:
-        print("找不到强调色按钮（两套主题的强调色都试过了，也重试过抓帧）")
+        print("找不到选择页的「开始扫描」按钮（强调色实心块，重试过抓帧）")
         unpin(hwnd)
         return 1
-    button_x, button_y, box = button
+    button_x, button_y = button
     print(f"开始扫描按钮: 中心=({button_x},{button_y}) 外接矩形={box}")
 
-    # 输入框靠 Tab 定位，不用像素（理由见 focus_input 的注释）。
-    focus_input(box, button_y)
-    select_all()
-    type_text(root)
-    print(f"已输入目录: {root}")
-    time.sleep(0.4)
-
+    # ② 选模式，然后真点一下按钮。
+    choose_mode(args.mode)
+    print(f"已选择模式: {args.mode}")
     click(button_x, button_y)
-    print("已点击扫描")
+    print("已点击开始扫描")
 
+    # ③ 定时截屏。经典模式的验证就靠这几张图（卡片墙没有单元测试看得见的东西，
+    #    布局和喜报叠色的正确性只有截图能说话）。
     elapsed = 0
     for wait in waits:
         time.sleep(max(wait - elapsed, 0))
@@ -501,20 +551,37 @@ def main():
         save_png(target, width, pixels, (0, 0, width, height))
         print(f"t={wait}s 已截屏 -> {target}")
 
+    # ④ 工具模式可选：限定目录再扫一遍，验证输入框 + 回车重扫这条链路。
+    if args.root:
+        if args.mode != "tool":
+            print("经典模式没有目录输入框，--root 被忽略（第一轮已经是全盘扫描）")
+        else:
+            print(f"在工具栏输入目录并重扫: {args.root}")
+            type_root_and_rescan(args.root)
+            time.sleep(3)
+            width, height, pixels = capture()
+            target = output.replace(".png", "_filtered.png")
+            save_png(target, width, pixels, (0, 0, width, height))
+            print(f"限定目录后已截屏 -> {target}")
+
+    # ⑤ 工具模式可选：点第一行数据行，验证整行展开。
     if os.environ.get("CEFSCAN_SMOKE_EXPAND"):
-        width, _height, pixels = capture()
-        row = find_first_row(pixels, width, region)
-        if row is None:
-            print("找不到数据行，跳过展开验证")
-            unpin(hwnd)
-            return 1
-        print(f"点第一行数据行: {row}")
-        click(*row)
-        time.sleep(0.8)
-        width, height, pixels = capture()
-        target = output.replace(".png", "_expanded.png")
-        save_png(target, width, pixels, (0, 0, width, height))
-        print(f"展开后已截屏 -> {target}")
+        if args.mode != "tool":
+            print("经典模式里点卡片是在资源管理器里定位，跳过展开验证")
+        else:
+            width, _height, pixels = capture()
+            row = find_first_row(pixels, width, region)
+            if row is None:
+                print("找不到数据行，跳过展开验证")
+                unpin(hwnd)
+                return 1
+            print(f"点第一行数据行: {row}")
+            click(*row)
+            time.sleep(0.8)
+            width, height, pixels = capture()
+            target = output.replace(".png", "_expanded.png")
+            save_png(target, width, pixels, (0, 0, width, height))
+            print(f"展开后已截屏 -> {target}")
 
     unpin(hwnd)
     return 0
