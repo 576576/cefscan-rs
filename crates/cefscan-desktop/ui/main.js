@@ -55,6 +55,8 @@ const picker = document.getElementById('picker');
 const classicView = document.getElementById('classic-view');
 const toolView = document.getElementById('tool-view');
 const cards = document.getElementById('cards');
+const classicCount = document.getElementById('classic-count');
+const classicRefresh = document.getElementById('classic-refresh');
 const body = document.getElementById('results-body');
 const empty = document.getElementById('empty');
 const startButton = document.getElementById('start-button');
@@ -63,7 +65,10 @@ const rootInput = document.getElementById('root-input');
 const backendDisplay = document.getElementById('backend-display');
 const summary = document.getElementById('summary');
 
-/** 三个视图各有一条状态行，内容始终一致，所以按 class 一把改掉。 */
+/**
+ * 状态行按 class 一把改掉，但**不含经典模式那条条数**——它有自己的文案格式
+ * （见 renderCards），挂在 `#classic-count` 上，不是 `.status-text`。
+ */
 const statusNodes = document.querySelectorAll('.status-text');
 
 // 由 tauri.conf.json 的 withGlobalTauri = true 注入；在普通浏览器里打开时为 undefined。
@@ -259,11 +264,14 @@ function cardIconHtml(row) {
   return row.running ? `${icon}<span class="dot" title="运行中"></span>` : icon;
 }
 
+/** 经典模式的条数文案。0 也照实说，所以不需要单独的空态。 */
+function classicCountText(total) {
+  return `您的电脑里有 ${total} 个 Chromium`;
+}
+
 function renderCards() {
-  if (rows.length === 0) {
-    cards.innerHTML = '<p class="cards-empty">还没有结果</p>';
-    return;
-  }
+  // 条数在**顶部区域**（喜报"喜报"两字正下方），不在滚动区里，所以每次重绘都刷一次。
+  classicCount.textContent = classicCountText(rows.length);
 
   const visible = rows.slice(0, MAX_ITEMS);
   const parts = [];
@@ -297,7 +305,9 @@ function renderCards() {
  *    scale 会把 116px 的卡片量成 111px，行距随之算小、对齐全偏。offset* 是
  *    布局值，不受 transform 影响。
  * 2. **对齐要带上 padding-top**。行顶边在 `padding-top + k * 行距` 处，按纯
- *    `k * 行距` 对齐的话视口顶部会切掉小半行。
+ *    `k * 行距` 对齐的话视口顶部会切掉小半行。顶部区域（图标胶囊 + 条数）现在挪到
+ *    了 `#cards` 外面，所以这个 padding-top 是 0——但公式照旧得带上它，
+ *    否则以后谁再往里加内边距就又错了。
  * 3. **底部内边距补足**，让最大滚动量正好等于对齐后的目标位置。不补的话目标
  *    超过最大滚动量会被浏览器夹回去，对齐白做——而且最后一行（正是"自动跟随
  *    最新"最该看清的那一行）会被视口底部切掉一截。补出来的量小于一个行距，
@@ -367,6 +377,8 @@ function setScanning(value) {
     node.disabled = value;
     node.textContent = value ? '扫描中…' : '开始扫描';
   }
+  // 图标按钮不能走上面那个循环——`textContent = …` 会把图标本身抹掉。
+  classicRefresh.disabled = value;
 }
 
 /**
@@ -481,7 +493,8 @@ function applyDone(event) {
   document.getElementById('sum-sum').textContent = humanSize(event.sumBytes);
   document.getElementById('sum-backend').textContent = backendLabel(event.backend);
   document.getElementById('sum-elapsed').textContent = `${event.elapsedMs} ms`;
-  // 经典模式没有汇总栏，合计就并进状态行里。
+  // 这条状态行只服务选择页和工具模式。经典模式的结果显示是顶部那行条数
+  // （`renderCards` 负责），文案格式不一样，所以不在这里管它。
   setStatus(
     rows.length === 0
       ? '没有找到应用'
@@ -565,6 +578,9 @@ function bootstrap() {
   for (const id of ['classic-back', 'tool-back']) {
     document.getElementById(id).addEventListener('click', () => showView(null));
   }
+
+  // 经典模式那个刷新胶囊 = 重扫一次（它取代了原来显示结果条数的那个胶囊）。
+  classicRefresh.addEventListener('click', () => void runScan());
 
   scanButton.addEventListener('click', () => void runScan());
   backendDisplay.addEventListener('click', () => void refreshBackend());

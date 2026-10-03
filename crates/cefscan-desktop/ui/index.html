@@ -34,12 +34,30 @@
         </div>
       </section>
 
-      <!-- ② 经典模式：不留工具条，整张喜报就是画布，卡片直接浮在上面。 -->
+      <!-- ② 经典模式：整张喜报就是画布，不留工具条。顶部是一块**不滚动**的区域——
+           左上角两个只放图标的胶囊（返回 / 重新扫描），中间那行条数压在喜报的
+           "喜报"两个字正下方；卡片墙排在它下面，只有卡片墙滚。 -->
       <section id="classic-view" class="classic-view" hidden>
-        <div class="hud">
-          <button id="classic-back" type="button" class="back">← 返回</button>
-          <span id="classic-status" class="hud-status status-text">就绪</span>
-        </div>
+        <header class="classic-top">
+          <div class="hud">
+            <button id="classic-back" type="button" class="icon-pill" title="返回" aria-label="返回">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor"
+                   stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <line x1="19" y1="12" x2="5" y2="12" />
+                <polyline points="12 19 5 12 12 5" />
+              </svg>
+            </button>
+            <button id="classic-refresh" type="button" class="icon-pill" title="重新扫描" aria-label="重新扫描">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor"
+                   stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <polyline points="1 4 1 10 7 10" />
+                <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10" />
+              </svg>
+            </button>
+          </div>
+          <!-- 条数就是经典模式唯一的结果显示，0 也照实说，没有单独的空态文案。 -->
+          <p id="classic-count" class="classic-count">您的电脑里有 0 个 Chromium</p>
+        </header>
         <div id="cards" class="cards"></div>
       </section>
 
