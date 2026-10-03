@@ -85,7 +85,7 @@
 cefscan-rs/
 ├── Cargo.toml                 # workspace 根，[workspace.dependencies] 统一版本
 ├── rust-toolchain.toml        # channel = "1.92.0"（与参考实现对齐），components: clippy, rustfmt
-├── .github/workflows/{ci,release}.yml
+├── .github/workflows/{lint,build,release}.yml
 ├── crates/
 │   ├── cefscan-core/          # 引擎库：唯一的知识沉淀处
 │   │   ├── src/
@@ -1039,19 +1039,50 @@ C:\Users\16695\AppData\Local\Programs\WorkBuddy\WorkBuddy.exe
    规矩：**平台相关的断言要么 `#[cfg(target_os = ...)]` 分开写，要么把规则本身抽成平台无关的纯函数**（见 `filter::excluded_root_hit`，那段是纯字符串比较，抽出来之后 Windows 上也能测）。
 2. **别用"跑起来不 panic"当测试。** 这种断言既抓不到回归，又可能偷偷扫全盘——`empty_roots_report_an_error` 就是这么在 Linux CI 上跑了 115 秒、还一条断言都没有的。要测推导逻辑就直接调 `resolve_roots`。
 
-### 10.3 CI（`.github/workflows/ci.yml`）
+### 10.3 CI（`.github/workflows/`：lint + build + release）
 
-**已落地**。三个 job，触发条件是 push 到 main、打 `v*` tag、PR、手动：
+**已落地**。拆成三个 workflow，职责划分照 Suwayomi-next：
+
+| 文件 | 角色 |
+| --- | --- |
+| `lint.yml` | **质量门禁**：图标校验 / 前端逻辑 / rustfmt / clippy / 全量测试。**不跟 push / PR**，只由 `release.yml` 在构建之前调起（`workflow_call`），或手动 dispatch 单跑 |
+| `build.yml` | **可复用构建**（只由 `workflow_call` 触发）：接收 prep 算好的版本号，编译 + 打包两个平台，`upload-artifact` 上传 |
+| `release.yml` | **唯一入口**：推送 main → 自动 alpha；手动 dispatch → alpha / beta / release。算版本号 → 调 lint → 调 build → publish 建 Release |
+
+`lint.yml` 里四个 job：
 
 | job | 平台 | 做什么 |
 | --- | --- | --- |
-| `lint` | ubuntu | `python3 tools/check_icons.py`、`node tools/ui_harness.js`、`cargo fmt --all --check`、`cargo clippy --workspace --all-targets -- -D warnings`、feature 组合矩阵 |
+| `frontend` | ubuntu | `python3 tools/check_icons.py`、`node tools/ui_harness.js` |
+| `fmt` | ubuntu | `cargo fmt --all --check` |
+| `clippy` | ubuntu | `cargo clippy --workspace --all-targets --locked -- -D warnings` + feature 组合矩阵 |
 | `test` | windows + ubuntu | `cargo test --workspace --locked --no-fail-fast --profile ci`（Windows 上额外覆盖 `cefscanw` 的图标提取测试，那些是 `cfg(windows)` 的） |
-| `build` | windows + ubuntu | `cargo build --release --locked --workspace` → 收成 `dist/` → `upload-artifact` |
+
+#### 触发与通道
+
+| 通道 | 触发 | 版本名 | tag | prerelease |
+| --- | --- | --- | --- | --- |
+| alpha | 推送 main（自动） | `0.{提交数}` | `v0.{n}-alpha.{run_id}` | true |
+| beta | 手动 dispatch | `0.{提交数}` | `v0.{n}-beta.{run_id}` | false |
+| release | 手动 dispatch | `0.{提交数}` | `v0.{n}` | false |
+
+- **版本号 = 提交数**（`git rev-list --count HEAD`），形如 `0.123`，**不额外偏移**。参考实现 Suwayomi 用的是 `count + 3000`，那是为了给 Android `versionCode` 留段位，本项目不需要。
+- alpha / beta 的 tag 带 `run_id`，天然唯一；release 用纯版本号，同版本重复发布时 publish 先 `gh release delete --cleanup-tag`。
+- **版本号在编译期注入二进制**：`build.yml` 传 `CEFSCAN_BUILD_VERSION`，`cli.rs` 用 `option_env!` 读，所以 `cefscan --version` 与 Release 名一致；本地构建没有这个变量，回落到 Cargo.toml 的 `0.1.0`。`build.yml` 的冒烟步骤会 `grep` 这个版本号，注入失效会当场失败。
+- **纯文档 push 不出包**：`paths-ignore: ['docs/**', '*.md', '**/*.md']`。写成 `paths-ignore` 而**不是**顶层 `paths:` —— 后者是白名单语义，会把所有代码改动的 push 一起挡掉，而且完全静默。`*.md` 与 `**/*.md` 两条都给：`**/` 能否匹配零级目录（根 `README.md`）在 glob 实现之间有歧义，两条并置后两种语义下都覆盖。
+- **质量门禁挂在发布链路上**：`release.yml` 的 `lint` job 与 `prep` 并行，`build` 的 `needs` 里带上它 —— 门禁不过就直接不进入编译。推送 main 与手动 dispatch 都从 `release.yml` 进，所以没有绕过的路径。
+- **注释块 ≤ 1 行**：决策与背景写进本文件，workflow 里只留一行提示；`tools/ci_check.py` 会把关。
+- **改 workflow 先本地校验**，别靠推上去试错（一轮矩阵十几分钟，还会多出一个 alpha Release）：
+
+  ```bash
+  "C:/Users/16695/.workbuddy-ai/binaries/python/envs/default/Scripts/python.exe" tools/ci_check.py
+  ```
+
+  它做 YAML 可解析 + 每个 `run:` 过 `bash -n` + 注释块行数 + 触发/依赖结构断言（需要 pyyaml，所以用托管 venv 的解释器）。
 
 要点与坑：
 
-- **`build` 依赖 `lint` + `test`**，两者都绿才出产物。
+- **`build` 依赖整个 `lint.yml`**，门禁全绿才出产物。
 - **Rust 用 `dtolnay/rust-toolchain@stable`，不钉版本号**。这个决定是权衡过的：
   测试本身只要 1 秒多，慢的全是编译，而编译慢不慢几乎只取决于缓存命中——
   `Swatinem/rust-cache` 的 key 里含 rustc 版本哈希，所以 `stable` 每 6 周往前挪一次，
@@ -1064,7 +1095,7 @@ C:\Users\16695\AppData\Local\Programs\WorkBuddy\WorkBuddy.exe
   （见下一条），它让最坏情况从 10 分钟掉到 6 分钟上下。**要复现某次构建，把三处
   `@stable` 换成 `@1.99.0` 这种具体版本即可**，不需要改 `env`。
 - **所有 action 都用当前最新的大版本 tag**：`actions/checkout@v7`、
-  `actions/upload-artifact@v7`、`Swatinem/rust-cache@v2`。`@vN` 是 GitHub 官方维护的
+  `actions/upload-artifact@v7`、`actions/download-artifact@v8`、`Swatinem/rust-cache@v2`。`@vN` 是 GitHub 官方维护的
   浮动大版本 tag，补丁级安全修复会自动跟上；`dtolnay/rust-toolchain` 是个例外，
   它没有大版本 tag，只能写 `@stable` / `@master` / `@<版本号>`。
   升级前用 `gh api repos/<owner>/<repo>/releases/latest --jq .tag_name` 核一下真实标签，
@@ -1177,15 +1208,16 @@ strip = true
 | **M4 Everything 后端** | `backend/everything.rs`、IPC 协议、超时、自动回落 | 装了 Everything 的机器上秒级出结果；未装/精简版时自动回落且不失败；`--verbose` 打印实际后端 |
 | **M5 性能专项** | rayon 并行签名扫描、预构建 Finder、热路径去分配、`cefscan benchmark`、benchmark.ps1 | 输出 mean/min/max + 峰值 RSS；与 M4 基线对比有可量化提升并写入 README |
 | **M6 Tauri 2 GUI** | `cefscan-desktop`、React 前端、流式 Channel、虚拟列表、资源管理器定位 | 冷启动 < 1.5 s；扫描过程中列表渐进增长不卡 UI；点击能正确定位 |
-| **M7 发布工程** | Release workflow（tag `v*`）、NSIS 安装包、shell 补全、`docs/schema.md` 冻结、`completions/` | 打 tag 产出可安装产物；版本号与 `Cargo.toml` 一致（CI 校验） |
+| **M7 发布工程** | Release workflow（已落地，见 §10.3）、NSIS 安装包、shell 补全、`docs/schema.md` 冻结、`completions/` | 三个通道都能产出可下载产物；版本号由提交数推导并注入二进制 |
 
 **后置**：Linux `plocate` 后端、macOS Spotlight + `.app` bundle、图标提取（`pelite`）、CEF/Electron 版本号识别。
 
 **当前进度**：M0–M6 已落地并真机验证——两个 exe（`cefscan.exe` / `cefscanw.exe`）
-一条 `cargo build --release` 产出，51 个测试全绿，CLI 与 GUI 在同一目录下结果逐条一致。
-与原计划的偏差只有一处：**M6 的前端没用 React + Vite**，改成手写原生 HTML/CSS/JS
-（理由见 §8）。M7 只做了裸 exe 部分：`bundle.active = false`，没有 NSIS 安装包、
-没有 release workflow、没有 shell 补全。
+一条 `cargo build --release` 产出，全量 `cargo test` 与 124 项前端断言全绿，CLI 与 GUI
+在同一目录下结果逐条一致。与原计划的偏差有两处：**M6 的前端没用 React + Vite**，改成
+手写原生 HTML/CSS/JS（理由见 §8）；**M7 的发布链路已经落地**（§10.3 的三个 workflow，
+push main 出 alpha、dispatch 选 alpha/beta/release，版本号由提交数推导并注入二进制）。
+还没做的是打包形态：没有 NSIS 安装包、没有 shell 补全。
 
 ---
 
@@ -1223,7 +1255,7 @@ strip = true
 | Everything IPC | `src/search/backend/everything.rs`、`everything_protocol.rs` |
 | CLI 输出格式（手写序列化） | `src/cli.rs:231-372` |
 | C# 原版查询串与两级搜索 | `..\CefDetector\Form1.cs:146-253` |
-| CI / release workflow 模板 | `.github/workflows/ci.yml`、`.github/workflows/release.yml` |
+| CI / release workflow 模板 | `.github/workflows/lint.yml`、`.github/workflows/build.yml`、`.github/workflows/release.yml` |
 
 ---
 

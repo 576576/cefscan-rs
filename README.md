@@ -1,6 +1,6 @@
 # cefscan-rs
 
-[![CI](https://github.com/576576/cefscan-rs/actions/workflows/ci.yml/badge.svg)](https://github.com/576576/cefscan-rs/actions/workflows/ci.yml)
+[![Release](https://github.com/576576/cefscan-rs/actions/workflows/release.yml/badge.svg)](https://github.com/576576/cefscan-rs/actions/workflows/release.yml)
 
 找出电脑上所有基于 Chromium 内核的应用（CEF / Electron / NWJS / CefSharp / Edge / Chrome），
 给出它们的磁盘占用与是否正在运行。
@@ -19,13 +19,16 @@
 
 ## 预编译产物
 
-CI 在 `main` 分支、PR 和 `v*` tag 上跑，并通过 `build` job 上传可下载的产物
-（Actions 页面 → 对应 run → Artifacts）：
+推送 `main` 会自动出 alpha 预发布；手动触发 Release workflow 可选 `alpha` / `beta` /
+`release` 三个通道。Release 附件是每个平台一个 zip，解开就是一个自包含目录：
 
-| 产物 | 内容 |
+| 附件 | 内容 |
 | --- | --- |
-| `cefscan-windows-x86_64` | `cefscan.exe`、`cefscanw.exe`、`README.md`、`LICENSE` |
-| `cefscan-linux-x86_64` | `cefscan`、`cefscanw`、`README.md`、`LICENSE` |
+| `cefscan-{版本}-windows-x86_64.zip` | `cefscan.exe`、`cefscanw.exe`、`README.md`、`LICENSE` |
+| `cefscan-{版本}-linux-x86_64.zip` | `cefscan`、`cefscanw`、`README.md`、`LICENSE` |
+
+另外每次运行的产物也挂在该次 run 的 Artifacts 上（Actions 页面 → 对应 run → Artifacts），
+调试时不用等正式发布。
 
 ## 构建
 
@@ -56,7 +59,7 @@ sudo apt-get install -y libwebkit2gtk-4.1-dev librsvg2-dev
 GUI 运行时依赖系统自带的 WebView2（Windows 10/11 默认已装）。图标由
 `tools/make_icon.py`（纯标准库）生成，产物已入库，正常构建无需重跑。它会出两个文件：
 `icons/icon.ico`（Windows 资源）和 `icons/icon.png`（Unix 目标的窗口图标，
-必须是 RGBA）。`tools/check_icons.py` 校验这两条，CI 的 lint 第一步就会跑。
+必须是 RGBA）。`tools/check_icons.py` 校验这两条，`lint.yml` 的第一步就会跑。
 
 `.cargo/config.toml` 里开了 `+crt-static`，MSVC 运行库静态链接进二进制。
 所以两个 exe **只依赖 Windows 自带的核心 DLL**，不需要单独安装 VC++ 运行库，
@@ -167,8 +170,14 @@ node tools/ui_harness.js            # ui/main.js 的逻辑（124 项，不需要
 python tools/check_icons.py         # 图标齐全且为 RGBA
 ```
 
-上面这些（再加一组 `--no-default-features` 的 feature 组合矩阵）就是 CI 里跑的全部
-检查，见 `.github/workflows/ci.yml`。
+上面这些（再加一组 `--no-default-features` 的 feature 组合矩阵）就是 `lint.yml` 里跑的
+全部检查。CI 拆成三个 workflow：`lint.yml`（质量门禁，不跟 push / PR）、`build.yml`
+（可复用构建）、`release.yml`（唯一入口，推送 main 自动出 alpha）。改 workflow 之后先跑
+一次静态校验，别靠推上去试错（一轮矩阵十几分钟）：
+
+```bash
+python tools/ci_check.py    # YAML 可解析 + run 块过 bash -n + 注释块/结构断言（需 pyyaml）
+```
 
 GUI 另有一个**手动**冒烟测试，会真的去点窗口，验证 Tauri command / Channel /
 前端渲染这条链路（不进 `cargo test`）：
