@@ -226,3 +226,69 @@ pub fn run() {
 fn _assert_stats_used(stats: &ScanStats) -> u64 {
     stats.total_bytes
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `ScanEvent` 的线上格式是**前端唯一依赖的契约**（`main.js` 里读
+    /// `event.type` / `event.backend` / `event.totalBytes` …），但它跨的是
+    /// Rust↔JS 这道没有类型检查的边界：改名或漏掉 `camelCase` 都不会有编译错误，
+    /// 只会让界面静默失灵。所以这里把格式钉死。
+    #[test]
+    fn scan_events_keep_their_wire_format() {
+        let json = |event: &ScanEvent| serde_json::to_value(event).unwrap();
+
+        assert_eq!(
+            json(&ScanEvent::Started {
+                backend: "Everything".into()
+            }),
+            serde_json::json!({ "type": "started", "backend": "Everything" })
+        );
+
+        assert_eq!(
+            json(&ScanEvent::Done {
+                backend: "cefscan".into(),
+                apps: 2,
+                total_bytes: 10,
+                sum_bytes: 12,
+                elapsed_ms: 34,
+                dirs_scanned: 56,
+            }),
+            serde_json::json!({
+                "type": "done",
+                "backend": "cefscan",
+                "apps": 2,
+                "totalBytes": 10,
+                "sumBytes": 12,
+                "elapsedMs": 34,
+                "dirsScanned": 56,
+            })
+        );
+
+        assert_eq!(
+            json(&ScanEvent::Error {
+                message: "boom".into()
+            }),
+            serde_json::json!({ "type": "error", "message": "boom" })
+        );
+
+        // `Item` 是 newtype variant：内部标签模式下会把 AppRow 摊平，
+        // 所以前端拿到的是"AppRow 本身 + 一个 type 字段"。
+        let item = json(&ScanEvent::Item(AppRow {
+            path: r"C:\a\Demo.exe".into(),
+            root: r"C:\a".into(),
+            name: "Demo".into(),
+            kind: "electron".into(),
+            size: 1024,
+            running: true,
+            evidence: Some("Electron Framework".into()),
+            icon: None,
+        }));
+        assert_eq!(item["type"], "item");
+        assert_eq!(item["name"], "Demo");
+        assert_eq!(item["size"], 1024);
+        assert_eq!(item["evidence"], "Electron Framework");
+        assert!(item["icon"].is_null());
+    }
+}

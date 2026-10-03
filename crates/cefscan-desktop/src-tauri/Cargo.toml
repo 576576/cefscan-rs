@@ -19,6 +19,10 @@ cefscan-core = { workspace = true }
 tauri = { version = "2", features = [] }
 serde = { workspace = true }
 
+[dev-dependencies]
+# 只用来给 ScanEvent 的线上格式（前端依赖的契约）写断言。
+serde_json = { workspace = true }
+
 [target.'cfg(target_os = "windows")'.dependencies]
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",

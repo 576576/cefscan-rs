@@ -322,6 +322,7 @@ dependencies = [
  "cefscan-core",
  "png 0.18.1",
  "serde",
+ "serde_json",
  "tauri",
  "tauri-build",
  "windows-sys 0.61.2",
