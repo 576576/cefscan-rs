@@ -1062,11 +1062,11 @@ C:\Users\16695\AppData\Local\Programs\WorkBuddy\WorkBuddy.exe
 
 | 通道 | 触发 | 版本名 | tag | prerelease |
 | --- | --- | --- | --- | --- |
-| alpha | 推送 main（自动） | `0.{提交数}` | `v0.{n}-alpha.{run_id}` | true |
-| beta | 手动 dispatch | `0.{提交数}` | `v0.{n}-beta.{run_id}` | false |
-| release | 手动 dispatch | `0.{提交数}` | `v0.{n}` | false |
+| alpha | 推送 main（自动） | `0.{n/100}.{n%100}` | `v{版本}-alpha.{run_id}` | true |
+| beta | 手动 dispatch | 同上 | `v{版本}-beta.{run_id}` | false |
+| release | 手动 dispatch | 同上 | `v{版本}` | false |
 
-- **版本号 = 提交数**（`git rev-list --count HEAD`），形如 `0.123`，**不额外偏移**。参考实现 Suwayomi 用的是 `count + 3000`，那是为了给 Android `versionCode` 留段位，本项目不需要。
+- **版本号 = 提交数推导的三段式** `0.{n/100}.{n%100}`，其中 `n = git rev-list --count HEAD`、末段补零两位（58 条提交 → `0.0.58`，每满 100 条进一个 minor）。**不额外偏移** —— 参考实现 Suwayomi 用 `count + 3000` 把 minor 顶到 30+ 段位，那是给 Android `versionCode` 留的，本项目不需要。
 - alpha / beta 的 tag 带 `run_id`，天然唯一；release 用纯版本号，同版本重复发布时 publish 先 `gh release delete --cleanup-tag`。
 - **版本号在编译期注入二进制**：`build.yml` 传 `CEFSCAN_BUILD_VERSION`，`cli.rs` 用 `option_env!` 读，所以 `cefscan --version` 与 Release 名一致；本地构建没有这个变量，回落到 Cargo.toml 的 `0.1.0`。`build.yml` 的冒烟步骤会 `grep` 这个版本号，注入失效会当场失败。
 - **纯文档 push 不出包**：`paths-ignore: ['docs/**', '*.md', '**/*.md']`。写成 `paths-ignore` 而**不是**顶层 `paths:` —— 后者是白名单语义，会把所有代码改动的 push 一起挡掉，而且完全静默。`*.md` 与 `**/*.md` 两条都给：`**/` 能否匹配零级目录（根 `README.md`）在 glob 实现之间有歧义，两条并置后两种语义下都覆盖。

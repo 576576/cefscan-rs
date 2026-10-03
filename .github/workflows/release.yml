@@ -40,7 +40,7 @@ jobs:
         with:
           # 版本号要数提交数，必须拿全历史（默认的浅克隆只有 1 条）。
           fetch-depth: 0
-      # 版本号 = 提交数（形如 0.{count}），不额外偏移；alpha/beta 的 tag 带 run_id 保证唯一，release 用纯版本号。
+      # 版本号 = 提交数推导的三段式 0.{count/100}.{count%100 补零两位}，不额外偏移；alpha/beta 的 tag 带 run_id 保证唯一，release 用纯版本号。
       - name: 推导版本与 tag
         id: out
         shell: bash
@@ -56,7 +56,7 @@ jobs:
             *) echo "::error::未知通道 $CHANNEL"; exit 1 ;;
           esac
           COUNT="$(git rev-list --count HEAD)"
-          VERSION="0.${COUNT}"
+          VERSION="0.$((COUNT / 100)).$(printf '%02d' $((COUNT % 100)))"
           case "$CHANNEL" in
             release) TAG="v${VERSION}"; PRE="false" ;;
             beta)    TAG="v${VERSION}-beta.${{ github.run_id }}"; PRE="false" ;;
