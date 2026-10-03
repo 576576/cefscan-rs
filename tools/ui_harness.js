@@ -360,6 +360,11 @@ const enteringRows = () =>
 /** 卡片墙里画出来的卡片数 / 带入场动画的卡片数。 */
 const paintedCards = () => (cardsEl.innerHTML.match(/<article class="card/g) || []).length;
 const enteringCards = () => (cardsEl.innerHTML.match(/<article class="card enter/g) || []).length;
+/** 卡片墙 / 表格当前画出来的顺序（按 data-path）。验证"工具页排序不串到经典页"。 */
+const cardPaths = () =>
+  [...cardsEl.innerHTML.matchAll(/<article class="card[^>]*data-path="([^"]*)"/g)].map((m) => m[1]);
+const rowPaths = () =>
+  [...el('results-body').innerHTML.matchAll(/<tr data-path="([^"]*)"/g)].map((m) => m[1]);
 
 const item = (name, size) => ({
   type: 'item',
@@ -517,7 +522,9 @@ const PITCH = CARD_LAYOUT.cardH + CARD_LAYOUT.gap;
   invokeLog = [];
   scripted = [
     { type: 'started', backend: 'Everything' },
-    ...['A', 'B', 'C', 'D', 'E'].map((n, i) => item(n, 5000 - i * 100)),
+    // size 故意打乱：让"按占用排序"的结果与到达顺序明显不同，下面"卡片墙按到达顺序排"
+    // 的断言才有区分度——如果两者恰好同序（比如 size 递减），旧实现也会通过，断言白写。
+    ...['A', 'B', 'C', 'D', 'E'].map((n, i) => item(n, [3000, 1000, 5000, 2000, 4000][i])),
     done(5, 'Everything'),
   ];
 
@@ -554,9 +561,17 @@ const PITCH = CARD_LAYOUT.cardH + CARD_LAYOUT.gap;
 
   // 点表头排序会整墙重绘——已经在屏幕上的卡片不该重放一次入场动画。
   // （经典模式下 render() 也是画卡片墙，所以这个表头点得出一次真正的重绘。）
+  //
+  // 顺带钉住"排序不串台"：卡片墙按**扫描到达顺序**排，在工具页点了表头排序，卡片的
+  // 相对位置必须原样不动（用户明确要求"保持卡片弹出后的相对位置不变"）。这里数据是
+  // A..E 依次到达、size 递减，所以按 name 排会变成 E|D|C|B|A——旧实现原地排 `rows`，
+  // 下面那条断言会当场失败。
+  const arrivalOrder = ['A', 'B', 'C', 'D', 'E'].map((n) => `C:\\a\\${n}.exe`);
+  expect('卡片墙按扫描到达顺序排（不排序）', cardPaths().join('|'), arrivalOrder.join('|'));
   sortHeader.handlers.click();
   expect('重绘后不再重放动画', enteringCards(), 0);
   expect('重绘后卡片数不变', paintedCards(), 5);
+  expect('工具页排序不改变卡片顺序', cardPaths().join('|'), arrivalOrder.join('|'));
 
   // ---- 场景 3：返回选择页不打断扫描，也不重扫 ----
   const scansBefore = invokeLog.filter((cmd) => cmd === 'scan_apps').length;
@@ -595,7 +610,23 @@ const PITCH = CARD_LAYOUT.cardH + CARD_LAYOUT.gap;
   expect('工具模式立即收尾', el('status').textContent, '完成，共 3 个 · 合计 1 B');
   expect('探测和扫描用同一份 request', JSON.stringify(probeRequest), JSON.stringify(scanRequest));
 
-  // ---- 场景 4.5：已经有结果时切模式只复用，不重扫也不清空 ----
+  // 表格排序**确实生效**——不然上面/下面那些"排序不串台"的断言可能只是因为两边都没排。
+  // 连点两次表头会切换升/降，3 条数据的顺序必然反转，不依赖当前排序键是什么。
+  const tableBefore = rowPaths();
+  sortHeader.handlers.click();
+  expect('点表头后表格顺序确实变了（排序在生效）', rowPaths().join('|') !== tableBefore.join('|'), true);
+  expect('而且正好是反转', rowPaths().join('|'), tableBefore.slice().reverse().join('|'));
+
+  // ---- 场景 4.5：工具页的排序不串到经典页（用户明确要求）----
+  // 切回经典页**之前**先把表格排成与到达顺序不同的序——不然"卡片没跟随排序"可能只是
+  // 巧合（排序序恰好等于到达序）。到达顺序是 F|G|H，点表头切到 name 降序会变成 H|G|F。
+  const arrivalFgh = ['F', 'G', 'H'].map((n) => `C:\\a\\${n}.exe`).join('|');
+  for (let i = 0; i < 4 && rowPaths().join('|') === arrivalFgh; i += 1) sortHeader.handlers.click();
+  expectTrue(
+    `工具页已排成与到达顺序不同的序（${rowPaths().join(' ')}）`,
+    rowPaths().join('|') !== arrivalFgh
+  );
+
   const scansBeforeSwitch = invokeLog.filter((c) => c === 'scan_apps').length;
   el('tool-back').handlers.click(); // 回选择页
   await flush();
@@ -609,6 +640,7 @@ const PITCH = CARD_LAYOUT.cardH + CARD_LAYOUT.gap;
     scansBeforeSwitch
   );
   expect('切过去看到的是原来那批结果', paintedCards(), 3);
+  expect('切回经典页卡片仍是到达顺序（没跟随工具页排序）', cardPaths().join('|'), arrivalFgh);
   // 切回工具模式同样不重扫。
   el('classic-back').handlers.click();
   await flush();
