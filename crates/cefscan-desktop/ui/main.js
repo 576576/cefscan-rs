@@ -7,6 +7,17 @@ const MAX_ROWS = 500;
 /** 折叠路径时前面保留的目录层数（盘符 / UNC 根不计入）。 */
 const PATH_HEAD_SEGMENTS = 3;
 
+/**
+ * 后端显示文案。后端是自动挑的（有索引服务就用，没有就自己遍历），
+ * 所以前缀固定是"自动"；真正有信息量的是括号里的**具体后端名**
+ * （`cefscan` / `Everything`），而不是"遍历"/"索引"这类内部叫法。
+ */
+const BACKEND_PENDING = '自动（检测中…）';
+
+function backendLabel(name) {
+  return `自动（${name}）`;
+}
+
 const KIND_COLORS = {
   electron: '#7dc4e4',
   edge: '#5aa9e6',
@@ -24,7 +35,7 @@ const empty = document.getElementById('empty');
 const status = document.getElementById('status');
 const button = document.getElementById('scan-button');
 const rootInput = document.getElementById('root-input');
-const backendSelect = document.getElementById('backend-select');
+const backendDisplay = document.getElementById('backend-display');
 const summary = document.getElementById('summary');
 
 // 由 tauri.conf.json 的 withGlobalTauri = true 注入；在普通浏览器里打开时为 undefined。
@@ -176,9 +187,15 @@ async function runScan() {
   render();
   summary.hidden = true;
   status.textContent = '扫描中…';
+  backendDisplay.textContent = BACKEND_PENDING;
 
   const channel = new Channel();
   channel.onmessage = (event) => {
+    if (event.type === 'started') {
+      // 后端选定的那一刻就发过来，比第一条结果早得多——所以这个括号是真·实时。
+      backendDisplay.textContent = backendLabel(event.backend);
+      return;
+    }
     if (event.type === 'item') {
       // Item 事件的载荷就是 AppRow 本身，type 字段由 serde 打标签注入。
       const { type, ...row } = event;
@@ -193,13 +210,15 @@ async function runScan() {
       document.getElementById('sum-apps').textContent = String(event.apps);
       document.getElementById('sum-total').textContent = humanSize(event.totalBytes);
       document.getElementById('sum-sum').textContent = humanSize(event.sumBytes);
-      document.getElementById('sum-backend').textContent = event.backend;
+      document.getElementById('sum-backend').textContent = backendLabel(event.backend);
       document.getElementById('sum-elapsed').textContent = `${event.elapsedMs} ms`;
       status.textContent = rows.length === 0 ? '没有找到应用' : `完成，共 ${rows.length} 个`;
       setScanning(false);
       return;
     }
     if (event.type === 'error') {
+      // 失败时后端名可能还停在"检测中"，别让它挂着误导人。
+      backendDisplay.textContent = '自动（未确定）';
       status.textContent = `失败：${event.message}`;
       setScanning(false);
     }
@@ -208,10 +227,12 @@ async function runScan() {
   const root = rootInput.value.trim();
   try {
     await invoke('scan_apps', {
+      // backend 恒为 auto：界面上没有选项，挑选完全交给 core。
       channel,
-      request: { roots: root ? [root] : [], backend: backendSelect.value, threads: 0 },
+      request: { roots: root ? [root] : [], backend: 'auto', threads: 0 },
     });
   } catch (error) {
+    backendDisplay.textContent = '自动（未确定）';
     status.textContent = `失败：${String(error)}`;
     setScanning(false);
   }
@@ -227,9 +248,6 @@ function bootstrap() {
   button.addEventListener('click', () => void runScan());
   rootInput.addEventListener('keydown', (event) => {
     if (event.key === 'Enter') void runScan();
-  });
-  backendSelect.addEventListener('change', () => {
-    rootInput.focus();
   });
 
   body.addEventListener('click', (event) => {

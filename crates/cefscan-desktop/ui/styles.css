@@ -40,9 +40,19 @@ html, body {
   color: var(--text);
 }
 
-#root-input:focus, #backend-select:focus { outline: 1px solid var(--accent); }
+#root-input:focus { outline: 1px solid var(--accent); }
 
-#backend-select, #scan-button {
+/* 后端只读显示：长得像控件，但不是控件——没有下拉、没有焦点。 */
+#backend-display {
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: #1a1c21;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+#scan-button {
   padding: 6px 12px;
   border: 1px solid var(--border);
   border-radius: 6px;

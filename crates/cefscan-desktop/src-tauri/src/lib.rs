@@ -16,6 +16,8 @@ mod icon;
 #[serde(rename_all = "camelCase")]
 pub struct ScanRequest {
     pub roots: Vec<String>,
+    /// 搜索后端。GUI 不再提供选择，永远发 `auto`；字段留着是为了让这个命令
+    /// 对脚本/其它调用方仍然是完整的（与 CLI 的 `--backend` 取值一致）。
     pub backend: Option<String>,
     pub threads: Option<usize>,
 }
@@ -53,7 +55,14 @@ impl From<AppInfo> for AppRow {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase", tag = "type")]
 pub enum ScanEvent {
-    Started,
+    /// 后端刚选定，**先于任何结果**送达。
+    ///
+    /// 前端靠它把工具栏上的"自动"变成"自动（cefscan）"/"自动（Everything）"。
+    /// 没有这个事件的话，用户只能等扫描结束才从汇总里看到后端是谁，
+    /// 那"自动"这个选项就不可信了。
+    Started {
+        backend: String,
+    },
     Item(AppRow),
     #[serde(rename_all = "camelCase")]
     Done {
@@ -82,11 +91,10 @@ async fn scan_apps(
     });
     let options = to_options(&request);
 
-    let _ = channel.send(ScanEvent::Started);
-
-    // Channel 不是 Copy，闭包要 move 进去，所以先克隆一份给流式回调用，
+    // Channel 不是 Copy，闭包要 move 进去，所以两个回调各克隆一份；
     // 外层保留原件发 Done / Error。
     let item_channel = channel.clone();
+    let notice_channel = channel.clone();
     let outcome = tauri::async_runtime::spawn_blocking(move || {
         // CPU/IO 密集，必须走 spawn_blocking，不能堵住 async 运行时。
         cefscan_core::scan_streaming(
@@ -94,7 +102,11 @@ async fn scan_apps(
             |app| {
                 let _ = item_channel.send(ScanEvent::Item(app.into()));
             },
-            |_| {},
+            |notice| {
+                let _ = notice_channel.send(ScanEvent::Started {
+                    backend: notice.backend.to_owned(),
+                });
+            },
         )
     })
     .await

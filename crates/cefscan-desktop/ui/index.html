@@ -16,11 +16,11 @@
           placeholder="限定目录（留空扫描全部盘符）"
           spellcheck="false"
         />
-        <select id="backend-select">
-          <option value="auto">后端：自动</option>
-          <option value="filesystem">后端：遍历（cefscan）</option>
-          <option value="index">后端：索引（自动）</option>
-        </select>
+        <!-- 后端不提供选择：自动挑选总是更优（有 Everything 就用，没有就自己遍历）。
+             但"自动"两个字本身没有信息量，所以括号里实时显示它到底选了谁。 -->
+        <span id="backend-display" title="自动挑选搜索后端，括号内是本次实际使用的后端"
+          >自动（待扫描）</span
+        >
         <button id="scan-button" type="button">开始扫描</button>
         <span id="status" class="status">就绪</span>
       </header>
