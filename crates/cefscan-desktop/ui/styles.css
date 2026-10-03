@@ -22,10 +22,13 @@
   --row-line: #262a32;
 
   /* 卡片墙的尺寸。卡片定高是"按整行滚动"的前提：每行一样高，
-     JS 才能把滚动位置对齐到行边界（见 main.js 的 rowPitch / followNewest）。 */
-  --card-min: 168px;
-  --card-h: 116px;
-  --card-gap: 14px;
+     JS 才能把滚动位置对齐到行边界（见 main.js 的 rowPitch / followNewest）。
+     这三个值是**一组**：密度 = 一屏能放几张，跟 (card-min+gap) × (card-h+gap) 成反比。
+     想让密度变成 k 倍，就把三者一起乘 1/√k（横向和纵向各乘一次，合起来正好 k 倍）。
+     现在是 168/116/14 的 1/√1.5 ≈ 0.8165 倍，即密度 ×1.5。改的时候别只改一个。 */
+  --card-min: 137px;
+  --card-h: 95px;
+  --card-gap: 11px;
   /* 卡片是全透明的——喜报直接透上来，卡片只靠描边和内容成组。
      两个主题都用它，所以不需要在 html.classic 里覆盖。 */
   --card-bg: transparent;
@@ -240,13 +243,14 @@ html, body {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  /* 内边距和行间距刻意收得很紧：卡片定高 116px，内容必须装得下，
+  /* 内边距和行间距刻意收得很紧：卡片定高 95px，内容必须装得下，
      否则 `overflow: hidden` 会把应用名的下半截（尤其 g/p/y 这类下伸笔画）切掉。
-     算一笔账：116 - 10×2 = 96 可用，内容 40(图标) + 6 + 19(名称) + 6 + 16(占用) = 87。 */
-  gap: 6px;
-  padding: 10px 12px;
+     算一笔账：95 - 8×2 = 79 可用，内容 32(图标) + 4 + 18(名称) + 4 + 15(占用) = 73。
+     这套尺寸跟 --card-h 是绑死的，单独调大字号就会重新切字。 */
+  gap: 4px;
+  padding: 8px 10px;
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: 10px;
   background: var(--card-bg);
   overflow: hidden;
   cursor: pointer;
@@ -266,18 +270,19 @@ html, body {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 40px;
-  height: 40px;
+  width: 32px;
+  height: 32px;
 }
 
-.card-icon img { display: block; width: 40px; height: 40px; }
-.card-icon .placeholder { width: 40px; height: 40px; border: 1px solid var(--border); border-radius: 8px; background: var(--control); }
+.card-icon img { display: block; width: 32px; height: 32px; }
+.card-icon .placeholder { width: 32px; height: 32px; border: 1px solid var(--border); border-radius: 6px; background: var(--control); }
 .card-icon .dot { position: absolute; right: -3px; bottom: -3px; margin: 0; box-shadow: 0 0 0 2px var(--panel); }
 
-/* 行高写死，别让它继承 body 的 1.5（14 × 1.5 = 21px，加上图标和占用就装不下 116px 了，
-   装不下就会被 `overflow: hidden` 切掉下伸笔画）。 */
+/* 字号和行高都写死，别让它继承 body 的 14px / 1.5（= 21px，加上图标和占用就装不下
+   95px 了，装不下就会被 `overflow: hidden` 切掉下伸笔画）。 */
 .card-name {
   max-width: 100%;
+  font-size: 13px;
   font-weight: 600;
   line-height: 1.35;
   color: var(--text-strong);
@@ -287,7 +292,7 @@ html, body {
 }
 
 .card-size {
-  font-size: 12px;
+  font-size: 11px;
   line-height: 1.3;
   color: var(--muted);
   font-variant-numeric: tabular-nums;

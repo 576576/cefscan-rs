@@ -30,14 +30,37 @@ function backendLabel(name) {
  * 天然一条条到达的节奏才自带"缓缓出现"的观感。排队 + 固定节奏让两种后端
  * 看起来一致。
  *
- * REVEAL_BUDGET_MS 是止损：500 条按 120ms 一条要一分钟，所以积压越多
- * 一次揭示得越多，总时长收敛在这个预算内（见 revealTick 的 step 计算）。
+ * REVEAL_MAX_PER_TICK 是**硬上限**：不管积压多少，一拍最多搬这么多张。用户明确
+ * 要"最大出现速度"，因为之前只有下面那个预算、没有上限——66 条时一拍 2 张还行，
+ * 500 条时预算会把一拍推到 15 张，观感就是"唰"地一下全出来，一点仪式感都没有。
+ * 上限一卡，速度就恒定了：3 张 / 150ms = 20 张/秒。
+ *
+ * REVEAL_BUDGET_MS 是另一半：它只负责让**总时长**别失控。step 取两者的交集——
+ * 按预算算出来要搬几张，但绝不超过上限。66 条时预算算出来是 1 张/拍（约 10 秒
+ * 放完），500 条时是 7 张/拍、被上限砍到 3 张（约 25 秒）。没有上限就只有
+ * "快"，没有预算就只有"慢到没法用"，两个都要。
  */
-const REVEAL_STEP_MS = 120;
-const REVEAL_BUDGET_MS = 4000;
+const REVEAL_STEP_MS = 150;
+const REVEAL_BUDGET_MS = 12000;
+const REVEAL_MAX_PER_TICK = 3;
 
 /** 自动跟随的容差：滚到离底部这么近就算"回到底了"，重新开始跟随。 */
 const FOLLOW_SLACK = 24;
+
+/**
+ * 卡片墙自动跟随的**速度上限**（px/秒）。
+ *
+ * 为什么不用 `scrollTo({ behavior: 'smooth' })`：它的速度由浏览器定、没法调，
+ * 结果一多就是"唰"地一下滑到底（用户原话是"没有仪式感"）；而且它是**异步**的，
+ * `scrollTop` 不会立刻变——想按位置限速（"一次最多往前一行"）根本配合不了：
+ * 位置还没动，下一帧算出来的目标又是同一个，会被"目标没变就跳过"挡掉，
+ * 墙干脆一动不动。所以自己按帧推：位置由我们写，下一帧读到的就是真位置。
+ */
+const SCROLL_MAX_PX_PER_SEC = 340;
+/** 收尾减速的参考距离：剩余不足这么多就按比例放慢，免得"咔"地停住。 */
+const SCROLL_EASE_PX = 90;
+/** 收尾时的最低速度，免得最后几像素爬半天。 */
+const SCROLL_MIN_PX_PER_SEC = 70;
 
 const KIND_COLORS = {
   electron: '#7dc4e4',
@@ -98,10 +121,16 @@ let deferredDone = null;
  * 用户往上滚就停（他在翻看旧结果，别跟他抢滚动条），滚回底部再自动恢复。
  */
 let autoFollow = true;
-/** 上一次自动跟随的目标，用来避免重复发起同一个平滑滚动。 */
+/** 上一次自动跟随的目标，用来避免重复发起同一个滚动。 */
 let lastFollowTarget = -1;
-/** 上一次观察到的滚动位置，只用来判断"这次是往上还是往下"。 */
+/** 上一次观察到的滚动位置，只用来判断"这次是往上还是往下"。**只由 scroll 监听写**，
+ *  自己驱动的滚动动画绝不能碰它——否则动画写的值和事件里的值交错，"往上滚"会误判。 */
 let lastScrollTop = 0;
+
+/** 正在滚向的目标；null = 没在滚。 */
+let scrollTarget = null;
+let scrollRaf = 0;
+let scrollTs = 0;
 
 /** 已展开路径的行。用 Set 而不是给 <tr> 挂 class，是因为流式扫描会整表重绘。 */
 const expandedPaths = new Set();
@@ -132,6 +161,56 @@ function prefersReducedMotion() {
     typeof window.matchMedia === 'function' &&
     window.matchMedia('(prefers-reduced-motion: reduce)').matches
   );
+}
+
+/** 停下自己驱动的滚动动画。用户往上滚、开始新扫描、开新视图时都要叫一下。 */
+function stopScroll() {
+  if (scrollRaf) cancelAnimationFrame(scrollRaf);
+  scrollRaf = 0;
+  scrollTarget = null;
+  scrollTs = 0;
+}
+
+/**
+ * 滚动动画的一帧。
+ *
+ * 位置是我们自己写进 `cards.scrollTop` 的，所以下一帧读到的就是真位置——不会像
+ * 浏览器平滑滚动那样"目标没变但位置还没动"，也就不需要任何限速用的花招。
+ * 动画会一直自我续帧到追上目标为止，所以揭示队列放完之后它还能自己把墙补上去。
+ */
+function scrollFrame(ts) {
+  scrollRaf = 0;
+  if (scrollTarget === null) return;
+  // 帧间隔夹在 [1, 64] ms：标签页切回来时 ts 会跳一大截，不夹的话会一次冲到底。
+  // 桩里的 rAF 回调不带时间戳，用 16ms 兜底。
+  const dt = Number.isFinite(ts) && scrollTs ? Math.min(64, ts - scrollTs) : 16;
+  scrollTs = Number.isFinite(ts) ? ts : 0;
+
+  const from = cards.scrollTop;
+  const remaining = scrollTarget - from;
+  if (Math.abs(remaining) < 0.5) {
+    cards.scrollTop = scrollTarget;
+    scrollTarget = null;
+    return;
+  }
+  // 上限 + 收尾减速：剩余越少越慢（但有下限），看上去像自然滑停而不是"咔"地截断。
+  const speed = Math.min(
+    SCROLL_MAX_PX_PER_SEC,
+    Math.max(SCROLL_MIN_PX_PER_SEC, (Math.abs(remaining) / SCROLL_EASE_PX) * SCROLL_MAX_PX_PER_SEC)
+  );
+  cards.scrollTop = from + Math.sign(remaining) * Math.min(Math.abs(remaining), (speed * dt) / 1000);
+  scrollRaf = requestAnimationFrame(scrollFrame);
+}
+
+/** 把卡片墙滚到 target，速度不超过 `SCROLL_MAX_PX_PER_SEC`。已经在滚就直接改目标。 */
+function scrollCardsTo(target) {
+  if (prefersReducedMotion()) {
+    stopScroll();
+    cards.scrollTop = target;
+    return;
+  }
+  scrollTarget = target;
+  if (!scrollRaf) scrollRaf = requestAnimationFrame(scrollFrame);
 }
 
 function setStatus(text) {
@@ -256,10 +335,11 @@ function renderTable() {
   body.innerHTML = parts.join('');
 }
 
-/** 卡片里的图标。取不到图标时留一个同样大小的空槽，卡片高度才不会参差不齐。 */
+/** 卡片里的图标。取不到图标时留一个同样大小的空槽，卡片高度才不会参差不齐。
+ *  32px 这个数字跟 styles.css 的 .card-icon 和 --card-h 是绑死的，改一处要改两处。 */
 function cardIconHtml(row) {
   const icon = row.icon
-    ? `<img src="${row.icon}" alt="" width="40" height="40" />`
+    ? `<img src="${row.icon}" alt="" width="32" height="32" />`
     : '<span class="placeholder"></span>';
   return row.running ? `${icon}<span class="dot" title="运行中"></span>` : icon;
 }
@@ -302,7 +382,7 @@ function renderCards() {
  *
  * 1. **量行距用 offsetHeight，不用 getBoundingClientRect**。新卡片正带着入场
  *    动画（`translateY(10px) scale(0.96)`），rect 返回的是**动画中的**几何，
- *    scale 会把 116px 的卡片量成 111px，行距随之算小、对齐全偏。offset* 是
+ *    scale 会把 95px 的卡片量成 91px，行距随之算小、对齐全偏。offset* 是
  *    布局值，不受 transform 影响。
  * 2. **对齐要带上 padding-top**。行顶边在 `padding-top + k * 行距` 处，按纯
  *    `k * 行距` 对齐的话视口顶部会切掉小半行。顶部区域（图标胶囊 + 条数）现在挪到
@@ -315,6 +395,8 @@ function renderCards() {
  *
  * 目标是"最后一行完整可见 + 视口顶部是行顶边"这两个条件的**最小**解，所以
  * 内容每多一行，目标正好前进一个行距：看上去就是整行整行地往上走。
+ * **速度由 `scrollCardsTo` 统一限死**（`SCROLL_MAX_PX_PER_SEC`），这里只管算目标：
+ * 目标一次可以跳十几行，墙会自己按上限追上去。
  */
 function followNewest() {
   if (!autoFollow) return;
@@ -360,7 +442,7 @@ function followNewest() {
 
   if (target === lastFollowTarget) return;
   lastFollowTarget = target;
-  cards.scrollTo({ top: target, behavior: prefersReducedMotion() ? 'auto' : 'smooth' });
+  scrollCardsTo(target);
 }
 
 /** 新一次扫描开始时把跟随状态归零。 */
@@ -368,6 +450,7 @@ function resetFollow() {
   autoFollow = true;
   lastFollowTarget = -1;
   lastScrollTop = 0;
+  stopScroll();
   cards.scrollTop = 0;
 }
 
@@ -471,8 +554,10 @@ function revealTick() {
     }
     return;
   }
-  // 积压越多一次搬得越多：总揭示时长收敛在 REVEAL_BUDGET_MS 以内。
-  const step = Math.max(1, Math.ceil((pending * REVEAL_STEP_MS) / REVEAL_BUDGET_MS));
+  // 积压越多一次搬得越多（总时长收敛在 REVEAL_BUDGET_MS 以内），但**绝不超过
+  // REVEAL_MAX_PER_TICK**——上限才是"仪式感"的保证，预算只是别让它拖到天荒地老。
+  const byBudget = Math.max(1, Math.ceil((pending * REVEAL_STEP_MS) / REVEAL_BUDGET_MS));
+  const step = Math.min(byBudget, REVEAL_MAX_PER_TICK);
   for (let i = 0; i < step && revealQueue.length > 0; i += 1) {
     rows.push(revealQueue.shift());
   }
@@ -606,12 +691,16 @@ function bootstrap() {
   });
 
   // 自动跟随的开关：只有"往上滚"才可能是用户干的（自动跟随永远向下滚），
-  // 所以按方向判断就够了，不用去区分平滑滚动的中间帧，也用不着 scrollend。
+  // 所以按方向判断就够了。`lastScrollTop` **只在这里写**：滚动动画写的是 scrollTop
+  // 本身，如果它也去写 lastScrollTop，事件里的旧值和动画写的新值就会交错，
+  // 每一帧的向下滚动都会被误判成"用户往上滚"，跟随当场永久停摆。
   cards.addEventListener('scroll', () => {
     const top = cards.scrollTop;
     if (top < lastScrollTop - 2) {
       autoFollow = false;
       lastFollowTarget = -1;
+      // 用户要自己翻，正在跑的自动跟随动画立刻让位（不然会跟他抢滚动条）。
+      stopScroll();
     }
     const overflow = cards.scrollHeight - cards.clientHeight;
     if (overflow <= 0 || top >= overflow - FOLLOW_SLACK) autoFollow = true;
