@@ -29,7 +29,10 @@
 * 找「开始扫描」按钮：在窗口矩形内找**实心**强调色方块。选择页是深色主题，所以
   强调色是蓝的 `#4f8ff7`。这里不能只看颜色就取"最右一簇"（那是加选择页之前的做法）：
   同一个蓝还出现在标题文字（`.picker-title`）和选中那张模式卡的描边上。判据改成
-  「够宽 **且** 填充率够高」——标题文字约 0.35、模式卡描边约 0.03，而按钮是实心的约 0.8。
+  「够宽 **且** 填充率够高」——标题文字约 0.35、模式卡描边约 0.03，而按钮是实心的约 0.87。
+  **而且必须按二维连通域找，不能按 x 方向投影聚类**：投影忽略 y，标题 / 描边 / 按钮
+  三者在 x 上互相重叠、间隔都小于 6px，会被并成一个 479x370、填充率 0.09 的簇，
+  按钮跟着连坐判掉。这个坑预览截图验不出来（截图只验"长什么样"，不跑这个函数）。
 * 选模式：**用键盘**。选择页里第一个可聚焦元素就是那组单选钮（一组单选钮里只有被
   选中的那个是 tab stop），`Tab` 一次必中；`Down` 在组内切到工具模式。比按像素找
   单选钮稳得多，也更接近真实操作。
@@ -79,7 +82,10 @@ PICKER_ACCENT = (247, 143, 79)  # #4f8ff7
 TOLERANCE = 14
 # 按钮是 100+ px 宽的实心块；窗口边框、标题文字那几簇要么窄、要么不实心。
 BUTTON_MIN_WIDTH = 60
-# 实心判据：强调色像素数 / 外接矩形面积。按钮（内含白色文字）实测约 0.8，
+# 还得有高度：选中那张模式卡的**上下描边**是两条独立的 340x1 连通域，填充率 1.00
+# 而且比按钮更宽（实测按钮 222x63、描边 340x1）——只按宽度取最大就会选中一条 1px 的线。
+BUTTON_MIN_HEIGHT = 20
+# 实心判据：强调色像素数 / 外接矩形面积。按钮（内含白色文字）实测约 0.9，
 # 而标题文字的笔画只覆盖约 0.35、模式卡那条 1px 描边约 0.03。
 BUTTON_MIN_FILL = 0.5
 
@@ -261,57 +267,76 @@ def close_to(pixel, target, tolerance=TOLERANCE):
 def find_solid_block(pixels, width, region, accent):
     """找强调色的**实心**方块，返回 ((中心 x, 中心 y), (left, top, right, bottom))。
 
-    先用 x 方向聚类（间隔 > 6px 算另一簇），再对每簇算「填充率 = 强调色像素数 /
-    外接矩形面积」来挑。**这是「实心」和「描边 / 文字」的分水岭**：选择页上的蓝色
-    同时出现在标题文字和选中那张模式卡的 1px 描边上，单看宽度或位置都挑不准。
+    判据是「够宽 **且** 够高 **且** 填充率够高」，最后按面积取最大的那个。选择页上的
+    蓝色同时出现在好几处：标题文字（`.picker-title`，每个字母都是独立的小连通域）、
+    选中那张模式卡的 1px 描边、以及"开始扫描"按钮本身。实测：按钮 222x63 填充率 0.92、
+    标题文字填充率约 0.35、模式卡描边是两条 340x1 的线（填充率 1.00）。
+
+    两道闸缺一不可：填充率筛掉文字和"描边围成的框"，**最小高度筛掉 1px 的横线**
+    （它比按钮还宽，只按宽度取最大就会选中它）。
+
+    **必须用二维连通域，不能按 x 方向投影聚类**。投影会忽略 y：标题、模式卡描边、
+    按钮三者在 x 上互相重叠，间隔都小于 6px，于是被并成**同一个簇**——那个簇的
+    外接矩形是 479x370、填充率 0.09，于是按钮被连坐判掉。这个坑很隐蔽：
+    预览截图只验"长什么样"，不跑这个函数，所以一直没暴露出来。
 
     返回 `(None, None)` 表示没找到。
     """
     left, top, right, bottom = region
 
-    columns = {}
+    hits = set()
     for y in range(top, bottom):
         row = y * width * 4
         for x in range(left, right):
             index = row + x * 4
             if close_to(pixels[index : index + 3], accent):
-                columns.setdefault(x, []).append(y)
-
-    if not columns:
+                hits.add((x, y))
+    if not hits:
         return None, None
 
-    xs = sorted(columns)
-    clusters = [[xs[0]]]
-    for x in xs[1:]:
-        if x - clusters[-1][-1] <= 6:  # 间隔 > 6px 视为另一簇
-            clusters[-1].append(x)
-        else:
-            clusters.append([x])
-
+    # 8 邻接的连通域（flood fill）。同一块实心按钮是一整片，而 1px 描边虽然也连通，
+    # 但外接矩形大、填充率低，会被下面那道填充率闸筛掉。
     best = None
-    for cluster in clusters:
-        if len(cluster) < BUTTON_MIN_WIDTH:
+    seen = set()
+    for seed in hits:
+        if seed in seen:
             continue
-        ys = [y for x in cluster for y in columns[x]]
-        box_width = cluster[-1] - cluster[0] + 1
-        box_height = max(ys) - min(ys) + 1
-        fill = len(ys) / (box_width * box_height)
-        print(
-            f"  强调色簇 x {cluster[0]}..{cluster[-1]} "
-            f"尺寸 {box_width}x{box_height} 填充率 {fill:.2f}"
-        )
+        seen.add(seed)
+        stack = [seed]
+        xs = []
+        ys = []
+        while stack:
+            x, y = stack.pop()
+            xs.append(x)
+            ys.append(y)
+            for dx in (-1, 0, 1):
+                for dy in (-1, 0, 1):
+                    if dx == 0 and dy == 0:
+                        continue
+                    neighbour = (x + dx, y + dy)
+                    if neighbour in hits and neighbour not in seen:
+                        seen.add(neighbour)
+                        stack.append(neighbour)
+
+        box = (min(xs), min(ys), max(xs), max(ys))
+        box_width = box[2] - box[0] + 1
+        box_height = box[3] - box[1] + 1
+        fill = len(xs) / (box_width * box_height)
+        if box_width < BUTTON_MIN_WIDTH or box_height < BUTTON_MIN_HEIGHT:
+            continue
+        print(f"  实心候选: x {box[0]}..{box[2]} 尺寸 {box_width}x{box_height} 填充率 {fill:.2f}")
         if fill < BUTTON_MIN_FILL:
             continue
-        if best is None or box_width > best[0]:
-            best = (box_width, cluster, ys)
+        area = box_width * box_height
+        if best is None or area > best[0]:
+            best = (area, box)
 
     if best is None:
         return None, None
 
-    _, cluster, ys = best
-    box = (cluster[0], min(ys), cluster[-1], max(ys))
-    print(f"  采用最宽实心簇: x {cluster[0]}..{cluster[-1]} y {box[1]}..{box[3]}")
-    return ((cluster[0] + cluster[-1]) // 2, (min(ys) + max(ys)) // 2), box
+    _, box = best
+    print(f"  采用最大实心块: x {box[0]}..{box[2]} y {box[1]}..{box[3]}")
+    return ((box[0] + box[2]) // 2, (box[1] + box[3]) // 2), box
 
 
 def find_first_row(pixels, width, region, min_hits=40):
