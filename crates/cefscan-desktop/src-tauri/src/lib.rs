@@ -37,6 +37,16 @@ pub struct AppRow {
     pub icon: Option<String>,
 }
 
+/// `detect_backend` 的返回值。
+///
+/// 用结构体而不是裸字符串，是为了和 `ScanEvent::Started` 保持同一个形状：
+/// 前端两处读到的东西长一样，`probe.backend` 和 `event.backend` 可以互换着用。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackendProbe {
+    pub backend: String,
+}
+
 impl From<AppInfo> for AppRow {
     fn from(app: AppInfo) -> Self {
         Self {
@@ -78,18 +88,30 @@ pub enum ScanEvent {
     },
 }
 
+/// 探测"这次扫描会选哪个后端"，**不扫描、不查询索引服务**。
+///
+/// 报的名字和 `ScanEvent::Started` 是同一个，区别只在时机：那个要等真开扫
+/// （`discover()` 挑完后端）才知道，这个在开扫之前就能问。GUI 进工具模式时刷一次、
+/// 用户点一下后端 chip 再刷一次，于是"自动"不用等用户点"开始扫描"才现出原形。
+///
+/// 传整个 `request` 而不是单给一个 backend 字符串：探的是"**你即将用的那份参数**
+/// 会选谁"，所以前端把同一个 `ScanRequest` 先交给这里、再交给 `scan_apps`，
+/// chip 上写的和结果里报的不可能对不上。
+#[tauri::command]
+async fn detect_backend(request: Option<ScanRequest>) -> Result<BackendProbe, String> {
+    let options = to_options(&request.unwrap_or_else(empty_request));
+    Ok(BackendProbe {
+        backend: cefscan_core::detect_backend(&options).to_owned(),
+    })
+}
+
 /// 流式扫描：每识别出一个应用就立刻推给前端，前端逐条渲染。
 #[tauri::command]
 async fn scan_apps(
     channel: Channel<ScanEvent>,
     request: Option<ScanRequest>,
 ) -> Result<(), String> {
-    let request = request.unwrap_or(ScanRequest {
-        roots: Vec::new(),
-        backend: None,
-        threads: None,
-    });
-    let options = to_options(&request);
+    let options = to_options(&request.unwrap_or_else(empty_request));
 
     // Channel 不是 Copy，闭包要 move 进去，所以两个回调各克隆一份；
     // 外层保留原件发 Done / Error。
@@ -138,6 +160,14 @@ async fn scan_apps(
 #[tauri::command]
 fn reveal(path: String) -> Result<(), String> {
     reveal_in_explorer(&PathBuf::from(path))
+}
+
+fn empty_request() -> ScanRequest {
+    ScanRequest {
+        roots: Vec::new(),
+        backend: None,
+        threads: None,
+    }
 }
 
 fn to_options(request: &ScanRequest) -> ScanOptions {
@@ -217,7 +247,7 @@ fn reveal_in_explorer(path: &std::path::Path) -> Result<(), String> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![scan_apps, reveal])
+        .invoke_handler(tauri::generate_handler![scan_apps, detect_backend, reveal])
         .run(tauri::generate_context!())
         .expect("failed to launch cefscanw");
 }
@@ -291,5 +321,40 @@ mod tests {
         assert_eq!(item["size"], 1024);
         assert_eq!(item["evidence"], "Electron Framework");
         assert!(item["icon"].is_null());
+    }
+
+    /// `BackendProbe` 也是跨 Rust↔JS 的线上契约，同样没有类型检查兜底。
+    #[test]
+    fn backend_probe_keeps_its_wire_format() {
+        assert_eq!(
+            serde_json::to_value(BackendProbe {
+                backend: "cefscan".into()
+            })
+            .unwrap(),
+            serde_json::json!({ "backend": "cefscan" })
+        );
+    }
+
+    /// 后端的字符串取值是机器接口（与 CLI 的 `--backend` 对齐）。
+    /// 认错了不会报错，只会**悄悄换一个后端**，所以把映射钉死。
+    #[test]
+    fn request_backend_values_map_to_the_documented_enum() {
+        let backend_of = |value: Option<&str>| {
+            to_options(&ScanRequest {
+                roots: Vec::new(),
+                backend: value.map(str::to_owned),
+                threads: None,
+            })
+            .backend
+        };
+
+        assert_eq!(backend_of(None), Backend::Auto);
+        assert_eq!(backend_of(Some("auto")), Backend::Auto);
+        assert_eq!(backend_of(Some("index")), Backend::Index);
+        assert_eq!(backend_of(Some("cefscan")), Backend::Filesystem);
+        // `filesystem` 是改名前的旧值，留作兼容，不该再出现在文档里。
+        assert_eq!(backend_of(Some("filesystem")), Backend::Filesystem);
+        // 认不出来的值退回默认，而不是报错。
+        assert_eq!(backend_of(Some("whatever")), Backend::Auto);
     }
 }

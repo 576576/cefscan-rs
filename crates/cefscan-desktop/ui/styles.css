@@ -1,8 +1,11 @@
-/* 所有颜色都走变量，经典模式只换一套变量值就完成换肤。 */
+/* 所有颜色都走变量，经典模式只换一套变量值就完成换肤。
+   规矩：这里不许出现写死的颜色（--card-* 是尺寸不是颜色），否则经典模式会漏出深色。 */
 :root {
   --bg: #1b1d23;
   --bg-image: none;
   --panel: #22252c;
+  /* 需要压住底下图案时用这个。深色主题下 --panel 本来就不透明，两者一样。 */
+  --panel-solid: #22252c;
   --summary: #1f222a;
   --sheet: transparent;
   --border: #34383f;
@@ -17,15 +20,24 @@
   --th: #262a32;
   --row-hover: #23262e;
   --row-line: #262a32;
+
+  /* 卡片墙的尺寸。卡片定高是"按整行滚动"的前提：每行一样高，
+     JS 才能把滚动位置对齐到行边界（见 main.js 的 rowPitch / followNewest）。 */
+  --card-min: 168px;
+  --card-h: 116px;
+  --card-gap: 14px;
 }
 
 /* 经典模式：喜报背景 + 米黄纸面 + 中国红。深色主题的对比度在喜报上完全不够，
    所以不是加一层遮罩，而是整套换成亮色系——文字是深褐，落在米黄面板上。
-   透明度刻意留在 0.78~0.84：再厚一点喜报就糊成一片背景噪声，白瞎了这张图。 */
+   透明度刻意留在 0.72~0.84：再厚一点喜报就糊成一片背景噪声，白瞎了这张图。 */
 html.classic {
   --bg: #7d1a10;
   --bg-image: url("assets/images/background.webp");
   --panel: rgba(255, 250, 242, 0.8);
+  /* 喜报正中最亮的那块是纯黄，0.8 的米黄压不住它，文字会发飘。浮在图案上的
+     元素（选择页面板、HUD 小药丸）改用这个更实的底色。 */
+  --panel-solid: rgba(255, 250, 242, 0.93);
   --summary: rgba(255, 250, 242, 0.84);
   --sheet: rgba(255, 252, 246, 0.78);
   --border: rgba(176, 38, 22, 0.32);
@@ -66,6 +78,197 @@ html, body {
 
 #app { display: flex; flex-direction: column; height: 100%; }
 
+/* 三个视图都靠 flex 撑满 #app。子项必须显式 min-height: 0，
+   否则内部的可滚动区域会把容器撑破、滚动条长到外层去。 */
+.picker, .classic-view, .tool-view { flex: 1; min-height: 0; }
+
+/* ---------- ① 初始选择页 ---------- */
+
+.picker { display: flex; padding: 24px; overflow: auto; }
+
+/* 用 margin: auto 而不是给父级 align-items: center：窗口太矮时
+   align-items: center 会把面板顶部顶出可视区且滚不到，margin: auto 不会。 */
+.picker-panel {
+  margin: auto;
+  width: min(560px, 100%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  padding: 28px 32px 30px;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: var(--panel-solid);
+  box-shadow: 0 14px 44px rgba(0, 0, 0, 0.22);
+  text-align: center;
+}
+
+.picker-title { margin: 0; font-size: 26px; letter-spacing: 1px; color: var(--accent); }
+.picker-sub { margin: 0; color: var(--muted); }
+
+/* 两个选项并排一行、按钮独占下面一行居中——正好是个向下的三角形。 */
+.modes { display: flex; gap: var(--card-gap); width: 100%; }
+
+.mode {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 18px 14px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--control);
+  cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease;
+}
+
+.mode:hover { background: var(--control-hover); }
+.mode:has(input:checked) { border-color: var(--accent); background: var(--control-hover); }
+.mode:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.mode input { margin: 0; accent-color: var(--accent); cursor: pointer; }
+.mode-name { font-weight: 600; color: var(--text-strong); }
+.mode-desc { font-size: 12px; line-height: 1.4; color: var(--muted); }
+
+#start-button {
+  padding: 10px 44px;
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  background: var(--accent);
+  color: var(--on-accent);
+  font: 600 15px/1.5 inherit;
+  cursor: pointer;
+}
+
+#start-button:disabled { opacity: 0.6; cursor: default; }
+
+.picker-status { margin: 0; color: var(--muted); }
+.picker-status:empty { display: none; }
+
+/* ---------- ② 经典模式：整张喜报就是画布 ---------- */
+
+.classic-view { position: relative; display: flex; flex-direction: column; }
+
+/* 悬浮 HUD：不是工具条——没有整条背景，只有两个半透明小块浮在喜报上。
+   用户明确要求经典模式不留工具条，所以返回和状态只能这样挂。 */
+.hud {
+  position: absolute;
+  top: 14px;
+  left: 16px;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: calc(100% - 32px);
+}
+
+.hud-status {
+  padding: 5px 12px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--panel-solid);
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.back {
+  padding: 5px 12px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--panel-solid);
+  color: var(--text);
+  font: inherit;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.back:hover { background: var(--control-hover); color: var(--text-strong); }
+
+/* 卡片墙：卡片直接浮在喜报上，没有面板包着。
+   auto-fill + 1fr 让每行个数随窗宽自适应；min(…, 100%) 保证窄窗口下不横向溢出。
+   grid-auto-rows 定高 → 每行等高，"按整行滚动"才有确定的行距可对齐。 */
+.cards {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(var(--card-min), 100%), 1fr));
+  grid-auto-rows: var(--card-h);
+  gap: var(--card-gap);
+  align-content: start;
+  /* 上内边距留给悬浮 HUD，免得第一行卡片被盖住。 */
+  padding: 56px 16px 18px;
+}
+
+.card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--sheet);
+  overflow: hidden;
+  cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease, box-shadow 120ms ease;
+}
+
+/* 悬停只改颜色不改 transform：入场动画用了 animation-fill-mode: both，
+   结束态会一直压着 transform，hover 再设 transform 是无效的。 */
+.card:hover {
+  border-color: var(--accent);
+  background: var(--control-hover);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.16);
+}
+
+.card-icon {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+}
+
+.card-icon img { display: block; width: 40px; height: 40px; }
+.card-icon .placeholder { width: 40px; height: 40px; border: 1px solid var(--border); border-radius: 8px; background: var(--control); }
+.card-icon .dot { position: absolute; right: -3px; bottom: -3px; margin: 0; box-shadow: 0 0 0 2px var(--panel); }
+
+.card-name {
+  max-width: 100%;
+  font-weight: 600;
+  color: var(--text-strong);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.card-size { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+
+.cards-empty, .cards-more { grid-column: 1 / -1; margin: 0; padding: 16px; text-align: center; color: var(--muted); }
+
+/* 卡片版"缓缓出现"：只有刚揭示出来的卡片才有 .enter。 */
+@keyframes card-enter {
+  from { opacity: 0; transform: translateY(10px) scale(0.96); }
+  to { opacity: 1; transform: none; }
+}
+
+.card.enter { animation: card-enter 620ms cubic-bezier(0.22, 0.61, 0.36, 1) both; }
+
+@media (prefers-reduced-motion: reduce) {
+  .card.enter { animation: none; }
+}
+
+/* ---------- ③ 工具模式 ---------- */
+
+.tool-view { display: flex; flex-direction: column; }
+
 .toolbar {
   display: flex;
   align-items: center;
@@ -89,41 +292,32 @@ html, body {
 
 #root-input:focus { outline: 1px solid var(--accent); }
 
-/* 后端只读显示：长得像控件，但不是控件——没有下拉、没有焦点。 */
+/* 后端 chip：长得像只读标签，但其实是按钮——点一下重新检测。
+   不做成下拉：界面上没有第二个后端可选（自动挑选总是更优），
+   这个按钮存在的意义是"重新探一次"，比如刚把 Everything 启动起来。 */
 #backend-display {
   padding: 6px 10px;
   border: 1px solid var(--border);
   border-radius: 6px;
   background: var(--field);
   color: var(--muted);
-  white-space: nowrap;
-}
-
-/* 经典模式开关：默认勾选。 */
-.toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 6px 10px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--control);
+  font: inherit;
   white-space: nowrap;
   cursor: pointer;
-  user-select: none;
 }
 
-.toggle input { margin: 0; accent-color: var(--accent); cursor: pointer; }
+#backend-display:hover { border-color: var(--accent); color: var(--text-strong); }
 
 #scan-button {
   padding: 6px 12px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--accent);
   border-radius: 6px;
-  background: var(--control);
-  color: var(--text);
+  background: var(--accent);
+  color: var(--on-accent);
+  font: inherit;
+  cursor: pointer;
 }
 
-#scan-button { background: var(--accent); border-color: var(--accent); color: var(--on-accent); cursor: pointer; }
 #scan-button:disabled { opacity: 0.6; cursor: default; }
 
 .status { color: var(--muted); min-width: 160px; }
@@ -168,21 +362,6 @@ td { padding: 6px 12px; border-bottom: 1px solid var(--row-line); vertical-align
 
 tbody tr:hover { background: var(--row-hover); cursor: pointer; }
 
-/* 经典模式的"缓缓出现"：只有刚揭示出来的行才有 .enter，已经在屏幕上的行
-   不会因为排序/展开触发的整表重绘而重放动画。 */
-@keyframes row-enter {
-  from { opacity: 0; transform: translateY(8px); }
-  to { opacity: 1; transform: none; }
-}
-
-html.classic tbody tr.enter {
-  animation: row-enter 620ms cubic-bezier(0.22, 0.61, 0.36, 1) both;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  html.classic tbody tr.enter { animation: none; }
-}
-
 .num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
 
 /* 图标列：不给它排序，只占一个固定窄列（宽度由 colgroup 定）。 */
@@ -210,7 +389,7 @@ tr.expanded td.path { overflow: visible; white-space: normal; word-break: break-
   display: block;
   margin-top: 4px;
   padding: 2px 8px;
-  font-size: 12px;
+  font: 12px/1.5 inherit;
   border: 1px solid var(--border);
   border-radius: 4px;
   background: var(--control);

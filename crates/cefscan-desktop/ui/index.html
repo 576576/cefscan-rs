@@ -1,7 +1,7 @@
 <!doctype html>
-<!-- 经典模式（喜报背景 + 结果缓缓浮现）默认开启，所以主题类直接写在 html 上，
-     免得脚本跑起来之前先闪一下深色。 -->
-<html lang="zh-CN" class="classic">
+<!-- 初始选择页是深色的（不铺喜报），所以 html 上不预置任何主题类——深色就是默认。
+     进了经典模式才由脚本加上 classic；这样也不存在"脚本跑起来前闪一下"的问题。 -->
+<html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -10,59 +10,97 @@
   </head>
   <body>
     <div id="app">
-      <header class="toolbar">
-        <div class="brand">cefscanw</div>
-        <input
-          id="root-input"
-          type="text"
-          placeholder="限定目录（留空扫描全部盘符）"
-          spellcheck="false"
-        />
-        <!-- 后端不提供选择：自动挑选总是更优（有 Everything 就用，没有就自己遍历）。
-             但"自动"两个字本身没有信息量，所以括号里实时显示它到底选了谁。 -->
-        <span id="backend-display" title="自动挑选搜索后端，括号内是本次实际使用的后端"
-          >自动（待扫描）</span
-        >
-        <label class="toggle" title="换成喜报背景，并让结果一条条缓缓浮现">
-          <input id="classic-input" type="checkbox" checked />
-          <span>经典模式</span>
-        </label>
-        <button id="scan-button" type="button">开始扫描</button>
-        <span id="status" class="status">就绪</span>
-      </header>
+      <!-- ① 初始选择页：两个模式选项在上、开始扫描按钮在下，构成一个向下的三角。 -->
+      <section id="picker" class="picker">
+        <div class="picker-panel">
+          <h1 class="picker-title">cefscanw</h1>
+          <p class="picker-sub">找出电脑里所有 Chromium 内核应用</p>
 
-      <section class="summary" id="summary" hidden>
-        <div><span class="label">应用</span><span id="sum-apps">0</span></div>
-        <div><span class="label">总占用</span><span id="sum-total">0 B</span></div>
-        <div><span class="label">列表合计</span><span id="sum-sum">0 B</span></div>
-        <div><span class="label">后端</span><span id="sum-backend">-</span></div>
-        <div><span class="label">耗时</span><span id="sum-elapsed">0 ms</span></div>
+          <div class="modes" role="radiogroup" aria-label="展示方式">
+            <label class="mode">
+              <input id="mode-classic" type="radio" name="mode" value="classic" checked />
+              <span class="mode-name">经典模式</span>
+              <span class="mode-desc">应用一张张浮现，铺满整面背景</span>
+            </label>
+            <label class="mode">
+              <input id="mode-tool" type="radio" name="mode" value="tool" />
+              <span class="mode-name">工具模式</span>
+              <span class="mode-desc">表格列出全部细节，可排序、可定位</span>
+            </label>
+          </div>
+
+          <button id="start-button" type="button">开始扫描</button>
+          <p id="picker-status" class="picker-status status-text"></p>
+        </div>
       </section>
 
-      <main class="table-wrap">
-        <table id="results">
-          <colgroup>
-            <col class="col-icon" />
-            <col class="col-name" />
-            <col class="col-kind" />
-            <col class="col-size" />
-            <col class="col-running" />
-            <col class="col-path" />
-          </colgroup>
-          <thead>
-            <tr>
-              <th class="icon-col" aria-label="图标"></th>
-              <th data-sort="name">名称</th>
-              <th data-sort="kind">类型</th>
-              <th data-sort="size">占用</th>
-              <th data-sort="running">运行</th>
-              <th data-sort="path">路径</th>
-            </tr>
-          </thead>
-          <tbody id="results-body"></tbody>
-        </table>
-        <p id="empty" class="empty">点上面的按钮开始扫描。</p>
-      </main>
+      <!-- ② 经典模式：不留工具条，整张喜报就是画布，卡片直接浮在上面。 -->
+      <section id="classic-view" class="classic-view" hidden>
+        <div class="hud">
+          <button id="classic-back" type="button" class="back">← 返回</button>
+          <span id="classic-status" class="hud-status status-text">就绪</span>
+        </div>
+        <div id="cards" class="cards"></div>
+      </section>
+
+      <!-- ③ 工具模式：工具栏 + 汇总 + 表格，多一个返回。 -->
+      <section id="tool-view" class="tool-view" hidden>
+        <header class="toolbar">
+          <button id="tool-back" type="button" class="back">← 返回</button>
+          <div class="brand">cefscanw</div>
+          <input
+            id="root-input"
+            type="text"
+            placeholder="限定目录（留空扫描全部盘符）"
+            spellcheck="false"
+          />
+          <!-- 后端不提供选择：自动挑选总是更优（有 Everything 就用，没有就自己遍历）。
+               但"自动"两个字本身没有信息量，所以括号里显示它到底选了谁。做成按钮是
+               为了能手动重测——比如刚把 Everything 启动起来。 -->
+          <button
+            id="backend-display"
+            type="button"
+            title="自动挑选搜索后端；点一下重新检测"
+          >
+            自动（待检测）
+          </button>
+          <button id="scan-button" type="button">开始扫描</button>
+          <span id="status" class="status status-text">就绪</span>
+        </header>
+
+        <section class="summary" id="summary" hidden>
+          <div><span class="label">应用</span><span id="sum-apps">0</span></div>
+          <div><span class="label">总占用</span><span id="sum-total">0 B</span></div>
+          <div><span class="label">列表合计</span><span id="sum-sum">0 B</span></div>
+          <div><span class="label">后端</span><span id="sum-backend">-</span></div>
+          <div><span class="label">耗时</span><span id="sum-elapsed">0 ms</span></div>
+        </section>
+
+        <main class="table-wrap">
+          <table id="results">
+            <colgroup>
+              <col class="col-icon" />
+              <col class="col-name" />
+              <col class="col-kind" />
+              <col class="col-size" />
+              <col class="col-running" />
+              <col class="col-path" />
+            </colgroup>
+            <thead>
+              <tr>
+                <th class="icon-col" aria-label="图标"></th>
+                <th data-sort="name">名称</th>
+                <th data-sort="kind">类型</th>
+                <th data-sort="size">占用</th>
+                <th data-sort="running">运行</th>
+                <th data-sort="path">路径</th>
+              </tr>
+            </thead>
+            <tbody id="results-body"></tbody>
+          </table>
+          <p id="empty" class="empty">点上面的按钮开始扫描。</p>
+        </main>
+      </section>
     </div>
 
     <script src="main.js"></script>
