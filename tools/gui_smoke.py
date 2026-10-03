@@ -18,15 +18,19 @@
 设计要点：**不写死控件坐标**，而是从像素里认控件，这样改布局也不用改脚本：
 
 * 找窗口：`EnumWindows` + 标题前缀。
-* 找「开始扫描」按钮：在窗口矩形内找强调色 `#4f8ff7` 的像素，按 x 聚类后取
-  **最右**一簇。最左那簇是窗口自身边框的蓝色，必须排除。
-* 找输入框：在按钮同一行上、**按钮左侧**找 `#1a1c21` 最长的一段连续像素。
-  两个约束都必要：窗口底色 `#1b1d23` 与输入框底色只差 2，单靠容差分不开，
-  所以既要收紧容差（`FIELD_TOLERANCE`），又要把搜索范围截到按钮左边。
+* 把窗口提到最前：`SetWindowPos(HWND_TOPMOST)`。**只调 `SetForegroundWindow` 不够**，
+  见 `focus()` 的注释——那是个会让整个测试静默跑偏的坑。
+* 找「开始扫描」按钮：在窗口矩形内找强调色像素，按 x 聚类后取**最右**一簇。
+  强调色有两套（深色主题 `#4f8ff7` / 经典模式 `#c31c12`，后者是默认），逐个试，
+  哪套能聚出一簇足够宽的方块就用哪套。
+* 找输入框：**不用像素找**，用 Tab 键把焦点送进去。理由是实测出来的：经典模式的
+  输入框是半透明白叠在喜报上，色值随背景浮动，而工具条面板在渐变上会飘到和它只差 3
+  的地方——容差收到 2 都还能匹配出 x 8..717 一整片，点下去会落到面板上。
+  而 `#root-input` 是 DOM 里第一个可聚焦元素，Tab 一次必中，与主题、布局、配色全无关。
 * 输入文字：`SendInput` + `KEYEVENTF_UNICODE`，绕开键盘布局。
 * 截屏：GDI `BitBlt`，手写 PNG 编码 —— 本机没有 Pillow，`Add-Type` 也被安全策略拦了。
 
-已知脆弱点：依赖窗口完整可见、未被遮挡；颜色/尺寸若大改需要同步更新常量。
+已知脆弱点：颜色/尺寸若大改需要同步更新 `THEMES` 里的常量。
 """
 
 import ctypes
@@ -47,13 +51,28 @@ MOUSEEVENTF_LEFTUP = 0x0004
 KEYEVENTF_UNICODE = 0x0004
 KEYEVENTF_KEYUP = 0x0002
 INPUT_KEYBOARD = 1
+VK_TAB = 0x09
 
-# 与 ui/styles.css 里的 --accent / #root-input 背景保持一致。
-ACCENT = (247, 143, 79)  # BGRA 顺序的 #4f8ff7
-FIELD = (33, 28, 26)  # BGRA 顺序的 #1a1c21
+HWND_TOPMOST = -1
+HWND_NOTOPMOST = -2
+SWP_NOSIZE = 0x0001
+SWP_NOMOVE = 0x0002
+SWP_SHOWWINDOW = 0x0040
+
+# 两套主题的强调色（BGRA），对应 ui/styles.css 里的 --accent。
+#
+# 经典模式默认开启，所以不能只认深色那一套：经典模式的按钮是中国红 #c31c12，
+# 拿 #4f8ff7 去找什么都找不到——实测只会聚出窗口边框那一小簇，然后把它当成按钮，
+# 后面每一步都跟着错。色值是实测的，不是从 CSS 推的。
+#
+# 输入框不在这里：它改用 Tab 键定位，理由见文件头。
+THEMES = [
+    ("classic", (18, 28, 195)),  # #c31c12，默认主题
+    ("dark", (247, 143, 79)),  # #4f8ff7
+]
 TOLERANCE = 14
-# 窗口底色 #1b1d23 的 BGRA 是 (35, 29, 27)，跟 FIELD 只差 2，必须收紧才分得开。
-FIELD_TOLERANCE = 4
+# 按钮是 100+ px 宽的实心块；窗口边框、品牌文字那几簇都很窄，用宽度区分。
+BUTTON_MIN_WIDTH = 60
 
 # KIND_COLORS（见 ui/main.js）里各标签底色，BGRA 顺序，用来定位数据行。
 #
@@ -93,10 +112,40 @@ def find_window(prefix):
 
 
 def focus(hwnd):
+    """把窗口提到最前，并且**硬性置顶**。
+
+    只调 `SetForegroundWindow` 是不够的：Windows 允许当前前台进程拒绝把前台权让出去，
+    从终端里跑这个脚本时它经常静默失败，窗口还压在终端后面。而 `capture()` 抓的是
+    **屏幕**，于是抓回来一整张终端内容——症状是"整窗都是同一种深灰"，还会因为终端里的
+    蓝色链接文字匹配上强调色而"找到"一个假按钮，非常难判断。所以这里补一手
+    `SetWindowPos(HWND_TOPMOST)`：它是硬性置顶，不看前台权。收尾记得调 `unpin()`。
+    """
     if user32.IsIconic(hwnd):
         user32.ShowWindow(hwnd, SW_RESTORE)
+    user32.SetWindowPos(
+        wintypes.HWND(hwnd),
+        wintypes.HWND(HWND_TOPMOST),
+        0,
+        0,
+        0,
+        0,
+        SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW,
+    )
     user32.SetForegroundWindow(hwnd)
     time.sleep(0.6)
+
+
+def unpin(hwnd):
+    """取消置顶，别把用户的窗口一直按在最上面。"""
+    user32.SetWindowPos(
+        wintypes.HWND(hwnd),
+        wintypes.HWND(HWND_NOTOPMOST),
+        0,
+        0,
+        0,
+        0,
+        SWP_NOMOVE | SWP_NOSIZE,
+    )
 
 
 def window_region(hwnd):
@@ -199,54 +248,82 @@ def close_to(pixel, target, tolerance=TOLERANCE):
 
 
 def find_button(pixels, width, region):
-    """找强调色块。按 x 方向聚类，取最右一簇（按钮在输入框右侧）。"""
-    left, top, right, bottom = region
-    columns = {}
-    for y in range(top, bottom):
-        row = y * width * 4
-        for x in range(left, right):
-            index = row + x * 4
-            if close_to(pixels[index : index + 3], ACCENT):
-                columns.setdefault(x, []).append(y)
+    """找强调色块。按 x 方向聚类，取最右一簇（按钮在输入框右侧）。
 
-    if not columns:
-        return None
-
-    xs = sorted(columns)
-    clusters = [[xs[0]]]
-    for x in xs[1:]:
-        if x - clusters[-1][-1] <= 6:  # 间隔 > 6px 视为另一簇
-            clusters[-1].append(x)
-        else:
-            clusters.append([x])
-
-    print(f"强调色簇: {[(c[0], c[-1], len(c)) for c in clusters]}")
-    chosen = clusters[-1]
-    ys = [y for x in chosen for y in columns[x]]
-    return (
-        (chosen[0] + chosen[-1]) // 2,
-        (min(ys) + max(ys)) // 2,
-        (chosen[0], min(ys), chosen[-1], max(ys)),
-    )
-
-
-def find_field(pixels, width, y, region, right_limit):
-    """在给定行、`right_limit` 左侧找输入框，返回 (点击x, 宽度)。
-
-    用匹配像素的**最小/最大 x** 定边界，而不是找最长连续段：输入框里已经有文字
-    （上一轮输进去的路径）时，连续段会被文字切碎，只剩几十像素的碎片。
-    返回的 x 落在框内左侧内边距上，点哪儿都是把光标放进框里。
+    两套主题的强调色都试一遍，取第一个能聚出"足够宽"的方块的。用宽度过滤是必要的：
+    窗口边框和品牌文字也会命中同一个颜色，但它们都只有几像素宽。
     """
-    left, _top, _right, _bottom = region
-    hits = []
-    for x in range(left, right_limit):
-        index = (y * width + x) * 4
-        if close_to(pixels[index : index + 3], FIELD, FIELD_TOLERANCE):
-            hits.append(x)
-    if not hits:
-        return None
-    start, end = min(hits), max(hits)
-    return start + 10, end - start
+    left, top, right, bottom = region
+
+    for theme, accent in THEMES:
+        columns = {}
+        for y in range(top, bottom):
+            row = y * width * 4
+            for x in range(left, right):
+                index = row + x * 4
+                if close_to(pixels[index : index + 3], accent):
+                    columns.setdefault(x, []).append(y)
+
+        if not columns:
+            continue
+
+        xs = sorted(columns)
+        clusters = [[xs[0]]]
+        for x in xs[1:]:
+            if x - clusters[-1][-1] <= 6:  # 间隔 > 6px 视为另一簇
+                clusters[-1].append(x)
+            else:
+                clusters.append([x])
+
+        print(f"[{theme}] 强调色簇: {[(c[0], c[-1], len(c)) for c in clusters]}")
+
+        # 从右往左找第一个够宽的簇：按钮在最右边，但它右侧可能还有窄簇（状态文字）。
+        for chosen in reversed(clusters):
+            if len(chosen) < BUTTON_MIN_WIDTH:
+                continue
+            ys = [y for x in chosen for y in columns[x]]
+            print(f"[{theme}] 采用最右宽簇: x {chosen[0]}..{chosen[-1]}")
+            return (
+                (chosen[0] + chosen[-1]) // 2,
+                (min(ys) + max(ys)) // 2,
+                (chosen[0], min(ys), chosen[-1], max(ys)),
+            )
+
+    return None
+
+
+def focus_input(button_box, button_y):
+    """把键盘焦点送进输入框。
+
+    为什么不按像素找输入框：经典模式的输入框底色是 `rgba(255,255,255,0.72)` 叠在
+    喜报上，最终色值取决于背景，而且工具条面板（`rgba(255,250,242,0.8)`）在同一行上
+    会飘到和它只差 3 的地方。实测容差收到 2 也还能匹配出 x 8..717 一整片，
+    `min(hits)+10` 会落到面板上，输进去的路径直接丢掉。
+
+    改用键盘：`#root-input` 是 DOM 里第一个可聚焦元素（在它之前只有一个 `.brand`
+    span），所以先把焦点清干净、再按一次 Tab 必定落在输入框上。与主题、布局、配色
+    都无关，而且比像素匹配更接近用户真实操作。
+
+    清焦点的办法是点一下工具条的空白处——位置从已经找到的按钮外接矩形推出来
+    （按钮右侧 60px），不写死坐标。
+    """
+    _left, _top, right, _bottom = button_box
+    click(right + 60, button_y)
+    time.sleep(0.2)
+
+    press_key(VK_TAB)
+    time.sleep(0.2)
+
+
+def press_key(vk):
+    """敲一次普通按键（按下 + 抬起）。"""
+    for flags in (0, KEYEVENTF_KEYUP):
+        item = Input()
+        item.type = INPUT_KEYBOARD
+        item.union.ki = KeybdInput(vk, 0, flags, 0, None)
+        user32.SendInput(1, ctypes.byref(item), ctypes.sizeof(Input))
+        time.sleep(0.03)
+    time.sleep(0.1)
 
 
 def find_first_row(pixels, width, region, min_hits=40):
@@ -356,6 +433,26 @@ def select_all():
 # ---------------------------------------------------------------- 主流程
 
 
+def locate_button(hwnd, region, attempts=3):
+    """抓帧并找按钮，失败就重新聚焦再抓一次。
+
+    为什么要重试：刚把窗口置顶之后，DWM 有一小段时间还没合成完，`BitBlt` 抓回来的是
+    一帧**不完整**的画面——实测遇到过"表格和复选框都在、唯独按钮那一块是空的"，
+    于是 `find_button` 报找不到。这种帧是偶发的（同一个状态紧接着再跑一次就正常），
+    所以值得重试，而不是直接判失败。
+    """
+    for attempt in range(1, attempts + 1):
+        width, _height, pixels = capture()
+        button = find_button(pixels, width, region)
+        if button is not None:
+            return button, width, pixels
+        if attempt < attempts:
+            print(f"第 {attempt} 次没找到按钮，重新聚焦再抓一帧")
+            focus(hwnd)
+            time.sleep(0.8)
+    return None, None, None
+
+
 def main():
     if len(sys.argv) < 3:
         print(__doc__)
@@ -374,26 +471,19 @@ def main():
     print(f"窗口: {title!r} hwnd={hwnd}")
     focus(hwnd)
 
-    width, _height, pixels = capture()
     region = window_region(hwnd)
     print(f"窗口矩形: {region}")
 
-    button = find_button(pixels, width, region)
+    button, width, pixels = locate_button(hwnd, region)
     if button is None:
-        print("找不到强调色按钮")
+        print("找不到强调色按钮（两套主题的强调色都试过了，也重试过抓帧）")
+        unpin(hwnd)
         return 1
     button_x, button_y, box = button
     print(f"开始扫描按钮: 中心=({button_x},{button_y}) 外接矩形={box}")
 
-    field = find_field(pixels, width, button_y, region, box[0] - 8)
-    if field is None:
-        print("找不到输入框")
-        return 1
-    field_x, run = field
-    print(f"输入框: 中心x={field_x} 宽度={run}px")
-
-    click(field_x, button_y)
-    time.sleep(0.2)
+    # 输入框靠 Tab 定位，不用像素（理由见 focus_input 的注释）。
+    focus_input(box, button_y)
     select_all()
     type_text(root)
     print(f"已输入目录: {root}")
@@ -416,6 +506,7 @@ def main():
         row = find_first_row(pixels, width, region)
         if row is None:
             print("找不到数据行，跳过展开验证")
+            unpin(hwnd)
             return 1
         print(f"点第一行数据行: {row}")
         click(*row)
@@ -425,6 +516,7 @@ def main():
         save_png(target, width, pixels, (0, 0, width, height))
         print(f"展开后已截屏 -> {target}")
 
+    unpin(hwnd)
     return 0
 
 
