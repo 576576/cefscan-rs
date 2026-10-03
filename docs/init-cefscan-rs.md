@@ -358,7 +358,10 @@ cefscan benchmark [--rounds N]    # 自测耗时与峰值内存
     应用体积差异很大（小的几十 MB、大的几个 GB），逐个发射能让用户立刻看到结果。
     代价是发射顺序不确定，所以 `scan_streaming` **不排序**，排序由 `scan()` /
     前端各自负责（`sort_apps` 是共用实现）。
-  - 事件类型：`ScanEvent::{Started, Item(AppRow), Done{...}, Error{message}}`，serde 用 `tag = "type"` 打标签。
+  - 事件类型：`ScanEvent::{Started{backend}, Item(AppRow), Done{...}, Error{message}}`，
+    serde 用 `tag = "type"` 打标签。
+  - `Started` 带后端名，而且**先于任何 `Item`**：它来自 `scan_streaming` 新增的
+    `on_notice` 回调，在 `discover()` 一返回就发出（见 §8.1）。
 - **能力**：图标列 + 名称列 + 类型 + 占用 + 运行 + 路径（可排序）、类型筛选、运行中高亮、
   点击行展开完整路径并在资源管理器中定位（`explorer /select,"path"`，注意路径带空格必须加引号，
   参考实现有对应单测 `src/search.rs:875-883`）。
@@ -398,6 +401,44 @@ cefscan benchmark [--rounds N]    # 自测耗时与峰值内存
 索引后端返回服务名而不是笼统的 `index`，是为了以后接 plocate / Spotlight 时
 显示名能自动跟着变，前端和 CLI 都不用改。GUI 汇总区、CLI 的 stderr 摘要都直接
 读 `stats.backend`，所以改后端名只需要动 core 里那两个常量。
+
+**GUI 不提供后端选择**，只有"自动"。理由：选择项本身就是伪需求——有索引服务时
+用索引严格优于遍历（毫秒 vs 秒，结果逐条一致），没有时想用也用不上，用户没有
+决策所需的上下文，却要为选错负责。但"自动"两个字没有信息量，用户会怀疑它到底
+干了什么，所以**括号里必须实时显示它选了谁**：
+
+```
+自动（待扫描）  →  自动（检测中…）  →  自动（cefscan） / 自动（Everything）
+```
+
+关键是"实时"要真的实时。后端名原本只在 `Done` 里回传，用户得等整轮扫描结束才
+知道后端是谁——那时候知道也没用了。所以 `scan_streaming` 多了一个 `on_notice`
+回调（`FnOnce(ScanNotice)`，语义上只该发生一次，也不需要 `Send`：通知在调用者
+线程上同步发出，不进任何工作线程池），在 `discover()` 返回的那一刻就调用：
+
+```rust
+let (candidates, backend_name, dirs_scanned) = discover(options)?;
+on_notice(ScanNotice { backend: backend_name });
+```
+
+配套的两处顺序调整：
+
+- **`running_processes()` 从 `discover()` 之前挪到之后**。它跟选后端毫无关系，
+  但枚举进程要几十毫秒；挪到后面能让这条通知更早到达。
+- **`scan()` 传 `|_| {}`**：CLI 不需要这条通知（它的 `--verbose` 已经在末尾打印
+  后端），所以只在 GUI 这条路径上用得上。
+
+文案上刻意避开"遍历"/"索引"这类内部叫法，直接显示具体后端名（`cefscan` /
+`Everything`）——用户看到的是"谁去干的活"，而不是"用了哪种算法"。`ScanEvent::Started`
+的 payload 里只有后端名，前缀"自动"由前端拼（`backendLabel()`），这样以后真加了
+后端选择，前端改一处即可。
+
+回归测试在 `scan.rs`：`notice_reports_the_backend_before_any_result` 断言通知
+**排在第一条结果之前**（`log.first() == "notice:cefscan"`），这是"实时"这个词的
+可执行定义。另外两条（`auto_backend_falls_back_to_cefscan_and_says_so`、
+`index_backend_without_a_service_is_an_error`）带 `cfg(not(all(feature =
+"everything", target_os = "windows")))` 门控——Windows 上装了 Everything 的机器
+行为不确定，只有"没有索引服务可用"的平台才能断言。
 
 **名称列**：`cefscan_core::display_name(path)`（`crates/cefscan-core/src/naming.rs`）。
 扫描结果里的 path 是"最能代表这个应用的那个文件或目录"，直接当名字没法看

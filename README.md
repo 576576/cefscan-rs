@@ -98,8 +98,10 @@ cefscan --format ndjson | jq -r .path     # 流式消费
 双击运行，或 `cefscanw.exe`。窗口顶部一行工具条：
 
 - **限定目录**：留空扫描所有盘符，也可以填 `C:\Users\me` 只扫一部分。
-- **后端**：自动 / 遍历（cefscan）/ 索引（自动），与 CLI 的 `--backend` 等价。
-  索引后端的**具体服务名**（如 `Everything`）在扫描完成后显示在汇总区。
+- **后端**：工具条上显示成 `自动（cefscan）` / `自动（Everything）`，括号里是**本次
+  实际使用的后端名**，在点下"扫描"之后立刻刷新（不是等扫完才告诉你）。GUI 不提供
+  后端选择——有索引服务时用索引严格优于遍历，没有时想选也选不上，选择项本身是伪需求。
+  需要强制指定后端请用 CLI 的 `--backend`。
 - **开始扫描**（或在输入框按回车）：扫描过程中结果**逐条流式出现**，按占用从大到小排。
 - 表格列：图标 / 名称 / 类型 / 占用 / 运行 / 路径。点表头可切换排序。
   - **名称**是从路径启发式推导的可读应用名（`...\Microsoft VS Code\Code.exe` → `Microsoft VS Code`）。
@@ -138,7 +140,7 @@ CEFSCAN_SMOKE_EXPAND=1 python tools/gui_smoke.py out.png C:/Users/me 6   # 额�
 | --- | --- | --- | --- |
 | `index` | Windows | Everything（非精简版） | 走 IPC 查索引，毫秒级；不可用时自动回落 |
 | `filesystem` | 全平台 | 无 | 自写的 rayon 并行遍历 |
-| `auto` | — | — | 先试索引，失败回落遍历（默认） |
+| `auto` | — | — | 先试索引，失败回落遍历（默认，也是 GUI 唯一会用的） |
 
 默认排除 `node_modules`、`target`、回收站、`System Volume Information`，
 以及 Windows 的 `WinSxS` / `servicing` / `Recovery`。
