@@ -70,7 +70,7 @@ cefscan --root "C:\Users\me"              # 只扫指定目录
 cefscan --format json -o result.json      # 输出到文件
 cefscan --kind electron --running-only    # 只看正在运行的 Electron 应用
 cefscan --min-size 500MB --sort size      # 只看 500 MiB 以上的
-cefscan --backend filesystem --threads 8  # 强制遍历后端，指定线程数
+cefscan --backend cefscan --threads 8    # 强制遍历后端，指定线程数
 cefscan --format ndjson | jq -r .path     # 流式消费
 ```
 
@@ -79,7 +79,7 @@ cefscan --format ndjson | jq -r .path     # 流式消费
 | 参数 | 说明 |
 | --- | --- |
 | `--root <DIR>` | 遍历起点，可重复；不指定则扫描所有盘符 |
-| `--backend <auto\|index\|filesystem>` | 搜索后端，默认 `auto` |
+| `--backend <auto\|index\|cefscan>` | 搜索后端，默认 `auto`（旧值 `filesystem` 仍可用） |
 | `--threads <N>` | 线程数，`0` 表示自动（默认上限 8） |
 | `-f, --format <table\|json\|ndjson\|csv\|toml>` | 输出格式 |
 | `-o, --output <FILE>` | 写文件而非 stdout |
@@ -102,6 +102,11 @@ cefscan --format ndjson | jq -r .path     # 流式消费
   实际使用的后端名**，在点下"扫描"之后立刻刷新（不是等扫完才告诉你）。GUI 不提供
   后端选择——有索引服务时用索引严格优于遍历，没有时想选也选不上，选择项本身是伪需求。
   需要强制指定后端请用 CLI 的 `--backend`。
+- **经典模式**（默认勾选）：背景换成 `assets/images/background.webp` 那张喜报，
+  整套配色也跟着换成米黄纸面 + 中国红，并且结果不再"啪"地一次全出来，而是
+  **一条条缓缓浮现**。关掉就回到深色主题、结果即时出现。只影响外观和揭示节奏，
+  不影响任何检测结果，所以扫描途中随时切换都安全。（那张图是有损 WebP q85、122 KB
+  ——它会被原样嵌进 exe，无损版要 736 KB，而渲染后的截图差分显示两者观感无差别。）
 - **开始扫描**（或在输入框按回车）：扫描过程中结果**逐条流式出现**，按占用从大到小排。
 - 表格列：图标 / 名称 / 类型 / 占用 / 运行 / 路径。点表头可切换排序。
   - **名称**是从路径启发式推导的可读应用名（`...\Microsoft VS Code\Code.exe` → `Microsoft VS Code`）。
@@ -112,15 +117,27 @@ cefscan --format ndjson | jq -r .path     # 流式消费
 
 扫描完成后工具条下方会给出应用数、总占用、列表合计、实际使用的后端与耗时。
 
+改前端时的两步验证，都不需要起 GUI：
+
+1. `node tools/ui_harness.js` —— 用 DOM 桩跑 `ui/main.js`，断言揭示节奏、经典模式
+   开关、发给后端的请求形状等 39 项行为（不需要 npm）。
+2. `python tools/preview_ui.py <输出目录>` —— 生成一份带假数据的静态预览页（把
+   `ui/` 整个抄过去，再塞一个假的 `window.__TAURI__`），浏览器打开即可看效果。
+
+桩验的是"跑了几次"，截图验的是"长什么样"，两者都跑一遍才算完整。
+
 ## 测试
 
 ```bash
 cargo test --workspace              # 单测 + doctest
 cargo fmt --all --check             # 格式
 cargo clippy --workspace --all-targets -- -D warnings
+node tools/ui_harness.js            # ui/main.js 的逻辑（39 项，不需要 npm）
+python tools/check_icons.py         # 图标齐全且为 RGBA
 ```
 
-上面三条就是 CI 里跑的全部检查（见 `.github/workflows/ci.yml`）。
+上面这些（再加一组 `--no-default-features` 的 feature 组合矩阵）就是 CI 里跑的全部
+检查，见 `.github/workflows/ci.yml`。
 
 GUI 另有一个**手动**冒烟测试，会真的去点窗口，验证 Tauri command / Channel /
 前端渲染这条链路（不进 `cargo test`）：
@@ -132,6 +149,9 @@ python tools/gui_smoke.py out.png C:/Users/me 6 20
 CEFSCAN_SMOKE_EXPAND=1 python tools/gui_smoke.py out.png C:/Users/me 6   # 额外验证行展开
 ```
 
+它会把窗口临时置顶（结束时会取消），免得被终端挡住；两套主题的强调色都认，
+经典模式开着也能跑。
+
 它不写死控件坐标，而是从像素里认按钮和输入框，改布局一般不用改脚本。
 
 ## 搜索后端
@@ -139,20 +159,20 @@ CEFSCAN_SMOKE_EXPAND=1 python tools/gui_smoke.py out.png C:/Users/me 6   # 额�
 | 后端 | 平台 | 依赖 | 说明 |
 | --- | --- | --- | --- |
 | `index` | Windows | Everything（非精简版） | 走 IPC 查索引，毫秒级；不可用时自动回落 |
-| `filesystem` | 全平台 | 无 | 自写的 rayon 并行遍历 |
+| `cefscan` | 全平台 | 无 | 自写的 rayon 并行遍历 |
 | `auto` | — | — | 先试索引，失败回落遍历（默认，也是 GUI 唯一会用的） |
 
 默认排除 `node_modules`、`target`、回收站、`System Volume Information`，
 以及 Windows 的 `WinSxS` / `servicing` / `Recovery`。
 
-**两个后端口径一致**：同一目录下 `index` 与 `filesystem` 结果逐条相同
+**两个后端口径一致**：同一目录下 `index` 与 `cefscan` 结果逐条相同
 （实测 21 应用 / 9.9 GiB / 29 候选），只是索引后端不用遍历。
 索引是全局的，所以 `--root` 和排除规则会在结果侧再筛一遍——否则
 `--backend index --root C:\Users\me` 会把整个磁盘吐出来。
 
 本机实测（16 逻辑核 / NTFS）：
 
-| 范围 | `index` | `filesystem` |
+| 范围 | `index` | `cefscan` |
 | --- | --- | --- |
 | `C:\Users\16695`（4.4 万目录） | 391 ms | 1581 ms |
 | 全盘 | 931 ms | — |

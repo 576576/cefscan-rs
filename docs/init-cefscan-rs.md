@@ -110,7 +110,8 @@ cefscan-rs/
 │   │   └── src/{main.rs, cli.rs, output.rs}
 │   └── cefscan-desktop/       # Tauri 2 外壳
 │       ├── ui/                # 手写 HTML/CSS/JS（无构建步骤，见 §8）
-│       │   └── {index.html, main.js, styles.css}
+│       │   ├── {index.html, main.js, styles.css}
+│       │   └── assets/images/background.webp   # 经典模式的喜报背景（内嵌进 exe）
 │       └── src-tauri/
 │           ├── src/{main.rs, lib.rs}
 │           ├── icons/{icon.ico, icon.png}
@@ -121,7 +122,11 @@ cefscan-rs/
 │   └── schema.md              # 输出 schema 契约（冻结后不得随意变更）
 ├── tools/
 │   ├── make_icon.py           # 生成 icons/ 下的 .ico 与 .png（纯标准库）
-│   └── check_icons.py         # 校验 tauri.conf.json 引用的图标齐全且为 RGBA
+│   ├── check_icons.py         # 校验 tauri.conf.json 引用的图标齐全且为 RGBA
+│   ├── preview_ui.py          # 生成带假数据的前端静态预览页（不用起 GUI 就能看效果）
+│   ├── ui_harness.js          # 用 DOM 桩跑 ui/main.js，断言揭示节奏/换肤/请求形状
+│   ├── gui_smoke.py           # 手动端到端冒烟：真去点窗口，验证 command/Channel/渲染
+│   └── compress_background.py # 背景图转有损 WebP q85（幂等，转前先备份原图）
 ├── benchmarks/                # benchmark.ps1 / criterion benches
 └── completions/               # clap 生成的 bash/zsh/fish/powershell 补全
 ```
@@ -299,8 +304,8 @@ impl SignatureScanner {
    还会带上 `WinSxS`。现在在结果侧用 `Filter::allows_path` 再筛一遍（`allows_dir`
    保留为它的别名，语义上遍历筛目录、索引筛文件）。
 
-**两个后端口径一致**：`--root C:\Users\16695` 下 index 与 filesystem 都是
-21 应用 / 9.9 GiB / 29 候选；index 391 ms，filesystem 1581 ms（全盘 index 931 ms）。
+**两个后端口径一致**：`--root C:\Users\16695` 下 index 与 cefscan 都是
+21 应用 / 9.9 GiB / 29 候选；index 391 ms，cefscan 1581 ms（全盘 index 931 ms）。
 
 > 另外 `everything` 必须是 core 的**默认 feature**。它只控制 `scan/everything.rs`
 > 是否编译；设成可选时 `cargo test` 默认不会编译那个模块的测试，等于 IPC 编解码
@@ -321,7 +326,7 @@ cefscan benchmark [--rounds N]    # 自测耗时与峰值内存
   -f, --format <table|json|csv|toml|ndjson>   默认 table
   -o, --output <FILE>                         写文件（默认覆写，--no-overwrite 时冲突即报错）
       --root <DIR>               可重复；不传则全盘
-      --backend <auto|index|filesystem>
+      --backend <auto|index|cefscan>
       --exclude-dir <NAME>       可重复
       --exclude-path <PATH>      可重复
       --kind <electron|nwjs|...> 可重复，过滤类型
@@ -363,8 +368,11 @@ cefscan benchmark [--rounds N]    # 自测耗时与峰值内存
   - `Started` 带后端名，而且**先于任何 `Item`**：它来自 `scan_streaming` 新增的
     `on_notice` 回调，在 `discover()` 一返回就发出（见 §8.1）。
 - **能力**：图标列 + 名称列 + 类型 + 占用 + 运行 + 路径（可排序）、类型筛选、运行中高亮、
+  经典模式（喜报背景 + 结果缓缓浮现，见 §8.1）、
   点击行展开完整路径并在资源管理器中定位（`explorer /select,"path"`，注意路径带空格必须加引号，
   参考实现有对应单测 `src/search.rs:875-883`）。
+- **窗口标题就叫 `cefscanw`**，不挂副标题（`tauri.conf.json` 的 `app.windows[0].title`）。
+  工具条左上角那个 `.brand` 也是同一个名字，两边保持一致。
 - **边界**：GUI 不复制任何检测逻辑，只做 `cefscan-core` 的消费者；core 不依赖 Tauri。
 - **构建**：`bundle.active = false`，只要裸 exe 不要安装包；`main.rs` 上
   `#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]` 去掉控制台。
@@ -401,6 +409,13 @@ cefscan benchmark [--rounds N]    # 自测耗时与峰值内存
 索引后端返回服务名而不是笼统的 `index`，是为了以后接 plocate / Spotlight 时
 显示名能自动跟着变，前端和 CLI 都不用改。GUI 汇总区、CLI 的 stderr 摘要都直接
 读 `stats.backend`，所以改后端名只需要动 core 里那两个常量。
+
+**CLI 的 `--backend` 取值跟着一起叫 `cefscan`**（`auto|index|cefscan`），不再叫
+`filesystem`：用户看到的"后端"就是"谁去找的"，遍历后端就是 cefscan 自己，
+显示名和选项名各叫一套只会让人对不上。`BackendArg::Cefscan` 上挂了
+`#[value(alias = "filesystem")]`，旧写法仍然能用，但不出现在 `--help` 和报错提示里。
+core 里的枚举仍叫 `Backend::Filesystem`——它描述的是机制（文件系统遍历），
+对外名字由 `FILESYSTEM_BACKEND` 那个常量决定。
 
 **GUI 不提供后端选择**，只有"自动"。理由：选择项本身就是伪需求——有索引服务时
 用索引严格优于遍历（毫秒 vs 秒，结果逐条一致），没有时想用也用不上，用户没有
@@ -477,9 +492,115 @@ on_notice(ScanNotice { backend: backend_name });
 **4 线程并发提取同一个 exe 不许失败**（就是上面那个并发 bug 的回归测试；它直接打
 `imp::extract` 而不是 `data_url`，否则会被结果缓存挡住、走不到 shell 调用）。
 
+**经典模式**（`index.html` 里默认 `checked`）：背景换成
+`ui/assets/images/background.webp` 那张喜报，整套配色跟着换成米黄纸面 + 中国红，
+并且结果不再一次全出来，而是**一条条缓缓浮现**。关掉即回深色主题、结果即时出现。
+
+几个实现要点：
+
+- **换肤靠 CSS 变量，不是加遮罩**。深色主题的对比度压在喜报上根本不够用，
+  所以 `html.classic` 直接覆盖整套 `--bg / --panel / --sheet / --text / --muted /
+  --accent / --field / --control / --th / --row-hover / --row-line`。代价是
+  `styles.css` 里不能再有写死的颜色——原来那几处 `#1a1c21`、`#2a2e36` 都提成了变量。
+  面板透明度留在 0.78~0.84：再厚一点喜报就糊成背景噪声。
+- **主题类挂在 `<html>` 上而不是 `<body>`**：`html, body` 共用同一条
+  `background-*` 规则，变量得能在 `html` 自己身上生效，而且写在 HTML 里就不会
+  等 JS 跑起来才换肤、闪一下深色。
+- **背景图必须在 `frontendDist` 里面**（所以放在 `ui/assets/`，不是仓库根的
+  `assets/`）。Tauri 只服务 `ui/`，放外面 `<img src>` 根本取不到。放在 `ui/` 下
+  的额外好处是它会被 `tauri-codegen` 一起内嵌进 exe，运行时不需要外部文件。
+- **背景图用有损 WebP q85（122 KB），不是无损**。关键在于 `tauri-codegen` 是
+  **原样嵌入**——把 `ui/` 下每个文件当字节数组塞进 exe，不做任何二次压缩。所以
+  这张图多大，`cefscanw.exe` 就白白大多少。最初放的是 736 KB 的无损 WebP，占了
+  当时 5.73 MB exe 的 13%，而它只是个背景；换成 q85 后 exe 降到 5.10 MB。
+  实测（1000×749 RGB，渐变 + 文字的海报）：
+
+  | 方案 | 字节 | 说明 |
+  | --- | ---: | --- |
+  | 无损 WebP | 736.0 KB | 原方案 |
+  | **WebP q85** | **122.4 KB** | 现方案 |
+  | WebP q90 / q80 | 157.0 / 100.5 KB | 相邻档位 |
+  | PNG 24bit | 917.6 KB | **反而更大**：渐变 + 文字的无损通道压不动 |
+  | PNG 256 色 | 342.8 KB | 有量化色带 |
+  | JPEG q90（4:4:4） | 279.2 KB | 比 WebP 大一倍，且文字边缘有振铃 |
+
+  也就是说，**PNG 和 JPEG 在这张图上都不划算**，有损 WebP 是唯一的选择。
+  转码脚本 `tools/compress_background.py`（幂等：已经是 `VP8 ` 就跳过，避免二次
+  有损劣化），原图备份在 `.workbuddy-ai/assets-backup/`——那里被 `.gitignore`
+  排除，所以不会被 `cargo clean` 清掉，而原图本身也没进 git。
+- **别用 RGB PSNR 判断 WebP 有损的画质**。q85 的 RGB PSNR 只有 31.58 dB，看着像
+  明显劣化，但拆开看是：亮度 Y **40.36 dB**、Cb 34.51 dB、Cr 35.30 dB。RGB 的算法
+  把色度误差按和亮度一样的权重摊了进来，而人眼对色度的分辨率低得多——这正是
+  JPEG/WebP 敢对色度做 4:2:0 抽样的前提，而这张图又恰好是高饱和红金配色。
+  看亮度的那个数才和观感对得上。顺带记一条：`save(..., subsampling="4:4:4")`
+  对 WebP 是**无效参数**，Pillow 静默忽略（字节数和 PSNR 与默认完全相同）。
+- **最终判据是渲染后的截图差分，不是裸图指标**。同一份页面分别用无损原图和 q85
+  渲染、截图、做逐像素差分，结果是**亮度 PSNR 53.12 dB、最大亮度差 11/255、
+  差 >8 的像素占 0.00%**。比裸图的 40 dB 还好——因为半透明面板（0.78~0.84 alpha）
+  把差异吸收掉了。所以这张图即使再压一档到 q80 也基本看不出来。
+- **"缓缓出现"要排队，不能收到就画**。索引后端会在几百毫秒内一次吐出几十条，
+  直接画出来是一整屏同时"啪"地出现，只有遍历后端那种天然一条条到达的节奏才自带
+  这个观感。所以经典模式下结果先进 `revealQueue`，由 `revealTick` 按固定节奏
+  （`REVEAL_STEP_MS = 120`）搬进 `rows`。止损是 `REVEAL_BUDGET_MS = 4000`：
+  一次搬 `ceil(pending * STEP / BUDGET)` 条，积压越多搬得越快，总时长收敛在预算内
+  ——否则 500 条按 120 ms 一条要等一分钟。
+- **汇总要等队列排空**（`deferredDone`）。不然会出现"已完成，共 8 个"和还在往外
+  浮的结果同框。
+- **入场动画只给"还没画过"的行**（`row.painted`）。`render()` 每次都重建整个
+  `tbody.innerHTML`，不加这个标记的话，排序、展开、来新结果都会让整表重放一次动画。
+  关掉经典模式时 `pushRow` 直接把 `painted` 置为 `true`，一行动画都不做。
+- 动画挂在 `html.classic tbody tr.enter` 上，并且 `@media (prefers-reduced-motion:
+  reduce)` 里关掉。
+
+**一个踩过的坑**：`.summary { display: flex }` 和浏览器默认的 `[hidden]
+{ display: none }` 优先级一样，但作者样式永远压过默认样式——所以只写 `hidden`
+属性是藏不住的，汇总栏会在开扫之前就顶着"应用 0 / 总占用 0 B"露出来。
+`styles.css` 顶部因此加了一条 `[hidden] { display: none !important; }`。
+
+**改前端的两步验证**，都不能省：
+
+1. `node tools/ui_harness.js` —— 拿一个几十行的 DOM 桩把 `ui/main.js` 跑起来，喂进
+   假事件，断言的是**调用次数和时序**（揭示队列搬了几条、`row.painted` 有没有防住
+   重放、关掉经典模式时队列是不是立刻放完、发给后端的请求长什么样）。39 项，半秒
+   跑完，不需要 npm。这些行为用肉眼点几下很难测全，用截图又只能验"长什么样"、
+   验不了"跑了几次"。
+2. `python tools/preview_ui.py <输出目录>` —— 生成一份带假数据的静态预览页（把
+   `ui/` 整个抄过去，再塞一个假的 `window.__TAURI__`），浏览器打开即可看效果。
+   桩**不能替代**截图：真实 DOM 的布局和 CSS 层叠它完全看不见，`[hidden]` 被
+   `.summary { display: flex }` 压掉那个 bug 就只有截图才发现得了。
+
+两个坑写在 `preview_ui.py` 的注释里：桩必须整体包在 IIFE 里（经典脚本的顶层
+`class Channel {}` 会占住全局词法作用域的名字，而 `main.js` 顶层写的正是
+`const { invoke, Channel } = …`，会以"Identifier 'Channel' has already been
+declared"整体解析失败，表现只是"点了按钮没反应"）；Python 的 `True` / `False`
+不是 JavaScript 字面量。
+
+想直接验画质差异时，还有一招：同一份页面分别用两个版本的背景图渲染、无头截图、
+逐像素差分。这比看裸图的 PSNR 靠谱得多（见 §8.1 里那张表的结论）。
+
+**端到端要另起一个**：`tools/gui_smoke.py`（手动，Windows）。它真的去点窗口，
+验证「Tauri command + Channel + 前端渲染」这条链，而不是只验编译得过。用法见
+README。它有两处被经典模式撞出来的坑，改前端时要一起想着：
+
+- **必须硬性置顶**（`SetWindowPos(HWND_TOPMOST)`）。脚本抓的是**屏幕**，只调
+  `SetForegroundWindow` 的话，Windows 允许前台进程拒绝让出前台权，从终端里跑
+  经常静默失败，窗口还压在终端后面——于是抓回一整张终端内容，还会因为终端里的
+  蓝色链接文字匹配上强调色而"找到"一个假按钮。症状是"整窗都是同一种深灰"，
+  非常难判断。收尾有 `unpin()` 取消置顶。
+- **强调色有两套**（`THEMES`）：经典模式默认开启，按钮是中国红 `#c31c12`，
+  而脚本原来写死的是深色主题的 `#4f8ff7`。不改的话只聚得出窗口边框那一小簇，
+  再把它当按钮，后面每一步都跟着错。两套都试，靠**簇宽 >= 60px** 过滤掉窗口边框
+  和品牌文字。
+- **输入框不用像素找，用 Tab 键**。经典模式的输入框是半透明白叠在喜报上，色值
+  随背景浮动，而工具条面板在同一行上会飘到和它只差 3 的地方——容差收到 2 都还能
+  匹配出 x 8..717 一整片，`min(hits)+10` 会落到面板上，输进去的路径直接丢掉。
+  改用键盘：`#root-input` 是 DOM 里第一个可聚焦元素，清掉焦点再按一次 Tab 必中。
+- **抓帧要能重试**。刚置顶之后 DWM 有一小段时间还没合成完，`BitBlt` 会抓回一帧
+  不完整的画面——实测遇到过"表格和复选框都在、唯独按钮那块是空的"。这种帧偶发，
+  所以 `locate_button` 失败时会重新聚焦再抓一次（最多 3 次），而不是直接判失败。
+
 **路径列折叠**：按**分隔符切段**折叠，不是按字符数切——前面只留「根 + 3 层目录」
 （`PATH_HEAD_SEGMENTS`），中间省略号，后面只留文件名，这样尾部一定是完整的文件名：
-
 ```
 C:\Users\16695\AppData\Local\Programs\WorkBuddy\WorkBuddy.exe
   → C:\Users\16695\AppData\…\WorkBuddy.exe
@@ -635,13 +756,35 @@ C:\Users\16695\AppData\Local\Programs\WorkBuddy\WorkBuddy.exe
 
 | job | 平台 | 做什么 |
 | --- | --- | --- |
-| `lint` | ubuntu | `python3 tools/check_icons.py`、`cargo fmt --all --check`、`cargo clippy --workspace --all-targets -- -D warnings`、feature 组合矩阵 |
-| `test` | windows + ubuntu | `cargo test --workspace --locked --no-fail-fast`（Windows 上额外覆盖 `cefscanw` 的图标提取测试，那些是 `cfg(windows)` 的） |
+| `lint` | ubuntu | `python3 tools/check_icons.py`、`node tools/ui_harness.js`、`cargo fmt --all --check`、`cargo clippy --workspace --all-targets -- -D warnings`、feature 组合矩阵 |
+| `test` | windows + ubuntu | `cargo test --workspace --locked --no-fail-fast --profile ci`（Windows 上额外覆盖 `cefscanw` 的图标提取测试，那些是 `cfg(windows)` 的） |
 | `build` | windows + ubuntu | `cargo build --release --locked --workspace` → 收成 `dist/` → `upload-artifact` |
 
 要点与坑：
 
 - **`build` 依赖 `lint` + `test`**，两者都绿才出产物。
+- **Rust 用 `dtolnay/rust-toolchain@stable`，不钉版本号**。这个决定是权衡过的：
+  测试本身只要 1 秒多，慢的全是编译，而编译慢不慢几乎只取决于缓存命中——
+  `Swatinem/rust-cache` 的 key 里含 rustc 版本哈希，所以 `stable` 每 6 周往前挪一次，
+  缓存就整体失效一次，那两个 job 要从零重编。实测同一台 runner：Sep 28 那次
+  （1.98.1，缓存命中）测试步骤约 1 分钟；Oct 3 那次（1.99.0，缓存失效）测试步骤
+  10 分 12 秒，其中**跑测试只占 1.2 秒**。
+  也就是说，那 10 分钟不是测试慢，是"每 6 周一次"的全量重编。曾经把版本钉成
+  `env.RUST_TOOLCHAIN: "1.99.0"` 来躲它，后来还是回到 `@stable`：跟着最新稳定版走
+  才能第一时间发现新版 rustc 的问题，而且真正把编译时间压下来的是 `--profile ci`
+  （见下一条），它让最坏情况从 10 分钟掉到 6 分钟上下。**要复现某次构建，把三处
+  `@stable` 换成 `@1.99.0` 这种具体版本即可**，不需要改 `env`。
+- **所有 action 都用当前最新的大版本 tag**：`actions/checkout@v7`、
+  `actions/upload-artifact@v7`、`Swatinem/rust-cache@v2`。`@vN` 是 GitHub 官方维护的
+  浮动大版本 tag，补丁级安全修复会自动跟上；`dtolnay/rust-toolchain` 是个例外，
+  它没有大版本 tag，只能写 `@stable` / `@master` / `@<版本号>`。
+  升级前用 `gh api repos/<owner>/<repo>/releases/latest --jq .tag_name` 核一下真实标签，
+  别凭印象写。
+- **`test` 用 `--profile ci`**（`Cargo.toml` 里定义）：依赖不优化、不带 debuginfo。
+  砍得最狠的一刀是覆盖 `[profile.dev.package."*"] opt-level = 2`——它本来是为了让
+  本地 `cargo run` 的扫描速度有参考价值，但测试根本不在乎依赖跑得快不快。
+  本地冷 target 实测：默认 dev 168s / `target/debug` 3.2 GB → ci profile 63s / 1.8 GB，
+  顺带让缓存上传下载也快一截。本地 dev profile 不受影响。
 - **`--no-fail-fast` 不能省**。cargo 默认遇到第一个失败的测试目标就停，第一次跑 Linux
   时只看到 `cefscan-core` 的 7 个失败，doctest 和 `cefscanw` 的测试根本没跑到——
   一次跑完才能拿到完整清单。
@@ -649,6 +792,9 @@ C:\Users\16695\AppData\Local\Programs\WorkBuddy\WorkBuddy.exe
   **只在 Unix 目标生效**的约束（`icons/icon.png` 必须存在且为 RGBA）。这类问题在
   Windows 上根本复现不了——第一次推 CI 时就是它让 Linux 编译在 5 分钟后才炸在
   `generate_context!` 里。
+- **`ui_harness.js` 也放在 lint 里**，紧跟着图标校验。理由同上：纯 Node、不用
+  `npm install`（runner 自带 node）、半秒跑完，却覆盖了 `cargo test` 够不着的
+  `ui/main.js`。把它塞进 `test` job 只会白白多等一个 job 的排队时间。
 - **Linux 每个 job 都要装 webkit 开发包**（`libwebkit2gtk-4.1-dev`、`librsvg2-dev`）。
   即使只跑测试也要装：`cefscanw` 在 workspace 里，`cargo test --workspace` 会编译它。
   **`ubuntu-22.04` 不行**——它只有 webkit2gtk-4.0，Tauri 2 要 4.1。
