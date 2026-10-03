@@ -23,10 +23,18 @@ pub enum SortArg {
     Kind,
 }
 
+/// 版本号：CI 会按提交数推导出形如 `0.123` 的值，用 `CEFSCAN_BUILD_VERSION` 在编译期
+/// 注入（见 .github/workflows/build.yml），这样 `cefscan --version` 与 Release 名对得上。
+/// 本地构建没有这个环境变量，回落到 Cargo.toml 的 workspace version。
+const VERSION: &str = match option_env!("CEFSCAN_BUILD_VERSION") {
+    Some(value) => value,
+    None => env!("CARGO_PKG_VERSION"),
+};
+
 #[derive(Debug, Parser)]
 #[command(
     name = "cefscan",
-    version,
+    version = VERSION,
     about = "找出电脑上所有基于 Chromium 内核（CEF / Electron / NWJS / CefSharp ...）的应用",
     long_about = "扫描文件系统，找出 CEF、Electron、NWJS、CefSharp、Edge、Chrome 应用，\n并给出它们的磁盘占用与是否正在运行。"
 )]
