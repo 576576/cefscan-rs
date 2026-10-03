@@ -566,11 +566,17 @@ function bootstrap() {
     return;
   }
 
-  // 初始选择页：选好模式再点开始扫描，扫描在选中的视图里跑。
+  // 初始选择页：选好模式再进去。**进去不等于重扫**——已经有结果（或正在扫）就只是
+  // 换个画法把同一份 `rows` 画出来，切模式不该把结果清掉、更不该重新扫一遍。
   startButton.addEventListener('click', () => {
     const chosen = document.querySelector('input[name="mode"]:checked');
-    showView(chosen && chosen.value === 'tool' ? 'tool' : 'classic');
-    void runScan();
+    const next = chosen && chosen.value === 'tool' ? 'tool' : 'classic';
+    showView(next);
+
+    if (rows.length > 0 || scanning) return;
+    // 手上一条结果都没有时，只有经典模式顺手开扫——它除了那个刷新胶囊没有别的
+    // 扫描入口。工具模式不自动扫：它有自己的工具栏，得先让人把目录填了再按"开始扫描"。
+    if (next === 'classic') void runScan();
   });
 
   // 两个视图各自的"返回"：只切视图，**不打断正在跑的扫描**——结果照旧往 rows 里堆，
