@@ -1,5 +1,7 @@
 <!doctype html>
-<html lang="zh-CN">
+<!-- 经典模式（喜报背景 + 结果缓缓浮现）默认开启，所以主题类直接写在 html 上，
+     免得脚本跑起来之前先闪一下深色。 -->
+<html lang="zh-CN" class="classic">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -21,6 +23,10 @@
         <span id="backend-display" title="自动挑选搜索后端，括号内是本次实际使用的后端"
           >自动（待扫描）</span
         >
+        <label class="toggle" title="换成喜报背景，并让结果一条条缓缓浮现">
+          <input id="classic-input" type="checkbox" checked />
+          <span>经典模式</span>
+        </label>
         <button id="scan-button" type="button">开始扫描</button>
         <span id="status" class="status">就绪</span>
       </header>

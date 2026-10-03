@@ -1,18 +1,65 @@
+/* 所有颜色都走变量，经典模式只换一套变量值就完成换肤。 */
 :root {
   --bg: #1b1d23;
+  --bg-image: none;
   --panel: #22252c;
+  --summary: #1f222a;
+  --sheet: transparent;
   --border: #34383f;
   --text: #d7dae0;
+  --text-strong: #fff;
   --muted: #9aa0aa;
   --accent: #4f8ff7;
+  --on-accent: #fff;
+  --field: #1a1c21;
+  --control: #2a2e36;
+  --control-hover: #343945;
+  --th: #262a32;
+  --row-hover: #23262e;
+  --row-line: #262a32;
+}
+
+/* 经典模式：喜报背景 + 米黄纸面 + 中国红。深色主题的对比度在喜报上完全不够，
+   所以不是加一层遮罩，而是整套换成亮色系——文字是深褐，落在米黄面板上。
+   透明度刻意留在 0.78~0.84：再厚一点喜报就糊成一片背景噪声，白瞎了这张图。 */
+html.classic {
+  --bg: #7d1a10;
+  --bg-image: url("assets/images/background.webp");
+  --panel: rgba(255, 250, 242, 0.8);
+  --summary: rgba(255, 250, 242, 0.84);
+  --sheet: rgba(255, 252, 246, 0.78);
+  --border: rgba(176, 38, 22, 0.32);
+  --text: #4a1d10;
+  --text-strong: #2b0f06;
+  --muted: #8b4b2c;
+  --accent: #c31c12;
+  --on-accent: #fff8e7;
+  --field: rgba(255, 255, 255, 0.72);
+  --control: rgba(255, 255, 255, 0.6);
+  --control-hover: rgba(255, 255, 255, 0.88);
+  --th: rgba(255, 247, 235, 0.95);
+  --row-hover: rgba(195, 28, 18, 0.1);
+  --row-line: rgba(176, 38, 22, 0.16);
 }
 
 * { box-sizing: border-box; }
 
+/* `.summary { display: flex }` 的优先级和 `[hidden]` 一样，但作者样式永远压过
+   浏览器默认样式，所以只写 `hidden` 属性是藏不住的——汇总栏会在开扫之前就
+   顶着"应用 0 / 总占用 0 B"露出来。 */
+[hidden] { display: none !important; }
+
 html, body {
   margin: 0;
   height: 100%;
-  background: var(--bg);
+  /* 用 background-image 而不是简写：--bg-image 在深色主题下是 none，
+     而 --bg 始终是个兜底底色（喜报没加载出来时也不会变成深灰配米黄字）。
+     center top：喜报的"喜报"两个字在顶部正中，cover 裁掉底部比裁掉顶部好。 */
+  background-color: var(--bg);
+  background-image: var(--bg-image);
+  background-position: center top;
+  background-size: cover;
+  background-repeat: no-repeat;
   color: var(--text);
   font: 14px/1.5 "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
 }
@@ -28,7 +75,7 @@ html, body {
   border-bottom: 1px solid var(--border);
 }
 
-.brand { font-weight: 600; letter-spacing: 0.5px; }
+.brand { font-weight: 600; letter-spacing: 0.5px; color: var(--accent); }
 
 #root-input {
   flex: 1;
@@ -36,7 +83,7 @@ html, body {
   padding: 6px 10px;
   border: 1px solid var(--border);
   border-radius: 6px;
-  background: #1a1c21;
+  background: var(--field);
   color: var(--text);
 }
 
@@ -47,20 +94,36 @@ html, body {
   padding: 6px 10px;
   border: 1px solid var(--border);
   border-radius: 6px;
-  background: #1a1c21;
+  background: var(--field);
   color: var(--muted);
   white-space: nowrap;
 }
+
+/* 经典模式开关：默认勾选。 */
+.toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--control);
+  white-space: nowrap;
+  cursor: pointer;
+  user-select: none;
+}
+
+.toggle input { margin: 0; accent-color: var(--accent); cursor: pointer; }
 
 #scan-button {
   padding: 6px 12px;
   border: 1px solid var(--border);
   border-radius: 6px;
-  background: #2a2e36;
+  background: var(--control);
   color: var(--text);
 }
 
-#scan-button { background: var(--accent); border-color: var(--accent); color: #fff; cursor: pointer; }
+#scan-button { background: var(--accent); border-color: var(--accent); color: var(--on-accent); cursor: pointer; }
 #scan-button:disabled { opacity: 0.6; cursor: default; }
 
 .status { color: var(--muted); min-width: 160px; }
@@ -70,12 +133,12 @@ html, body {
   gap: 24px;
   padding: 10px 16px;
   border-bottom: 1px solid var(--border);
-  background: #1f222a;
+  background: var(--summary);
 }
 
 .summary .label { color: var(--muted); margin-right: 8px; }
 
-.table-wrap { flex: 1; overflow: auto; }
+.table-wrap { flex: 1; overflow: auto; background: var(--sheet); }
 
 table { width: 100%; border-collapse: collapse; table-layout: fixed; }
 
@@ -92,18 +155,33 @@ th {
   top: 0;
   text-align: left;
   padding: 8px 12px;
-  background: #262a32;
+  background: var(--th);
   border-bottom: 1px solid var(--border);
   cursor: pointer;
   user-select: none;
   white-space: nowrap;
 }
 
-th:hover { color: #fff; }
+th:hover { color: var(--text-strong); }
 
-td { padding: 6px 12px; border-bottom: 1px solid #262a32; vertical-align: middle; }
+td { padding: 6px 12px; border-bottom: 1px solid var(--row-line); vertical-align: middle; }
 
-tbody tr:hover { background: #23262e; cursor: pointer; }
+tbody tr:hover { background: var(--row-hover); cursor: pointer; }
+
+/* 经典模式的"缓缓出现"：只有刚揭示出来的行才有 .enter，已经在屏幕上的行
+   不会因为排序/展开触发的整表重绘而重放动画。 */
+@keyframes row-enter {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: none; }
+}
+
+html.classic tbody tr.enter {
+  animation: row-enter 620ms cubic-bezier(0.22, 0.61, 0.36, 1) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html.classic tbody tr.enter { animation: none; }
+}
 
 .num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
 
@@ -135,12 +213,12 @@ tr.expanded td.path { overflow: visible; white-space: normal; word-break: break-
   font-size: 12px;
   border: 1px solid var(--border);
   border-radius: 4px;
-  background: #2a2e36;
+  background: var(--control);
   color: var(--text);
   cursor: pointer;
 }
 
-.reveal:hover { background: #343945; color: #fff; }
+.reveal:hover { background: var(--control-hover); color: var(--text-strong); }
 
 .tag {
   display: inline-block;

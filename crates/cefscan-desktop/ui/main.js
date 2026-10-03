@@ -18,6 +18,20 @@ function backendLabel(name) {
   return `自动（${name}）`;
 }
 
+/**
+ * 经典模式的结果揭示节奏。
+ *
+ * 为什么要排队而不是收到就画：索引后端会在几百毫秒内一次吐出几十条结果，
+ * 如果直接画出来，用户看到的是一整屏同时"啪"地出现——只有遍历后端那种
+ * 天然一条条到达的节奏才自带"缓缓出现"的观感。排队 + 固定节奏让两种后端
+ * 看起来一致。
+ *
+ * REVEAL_BUDGET_MS 是止损：500 条按 120ms 一条要一分钟，所以积压越多
+ * 一次揭示得越多，总时长收敛在这个预算内（见 revealTick 的 step 计算）。
+ */
+const REVEAL_STEP_MS = 120;
+const REVEAL_BUDGET_MS = 4000;
+
 const KIND_COLORS = {
   electron: '#7dc4e4',
   edge: '#5aa9e6',
@@ -36,6 +50,7 @@ const status = document.getElementById('status');
 const button = document.getElementById('scan-button');
 const rootInput = document.getElementById('root-input');
 const backendDisplay = document.getElementById('backend-display');
+const classicInput = document.getElementById('classic-input');
 const summary = document.getElementById('summary');
 
 // 由 tauri.conf.json 的 withGlobalTauri = true 注入；在普通浏览器里打开时为 undefined。
@@ -46,6 +61,15 @@ let sortKey = 'size';
 let sortAscending = false;
 let renderQueued = false;
 let scanning = false;
+
+/** 经典模式：喜报背景 + 结果排队缓缓浮现。初值取自勾选框（HTML 里默认 checked）。 */
+let classicMode = classicInput.checked;
+
+/** 经典模式下已到达但还没揭示出去的结果。 */
+let revealQueue = [];
+let revealTimer = null;
+/** 结果还在往外浮时先压住的汇总，等队列清空再显示。 */
+let deferredDone = null;
 
 /** 已展开路径的行。用 Set 而不是给 <tr> 挂 class，是因为流式扫描会整表重绘。 */
 const expandedPaths = new Set();
@@ -147,8 +171,15 @@ function render() {
     const detail = row.evidence ? `${row.kind} · ${row.evidence}` : row.kind;
     const expanded = expandedPaths.has(row.path);
     const icon = row.icon ? `<img src="${row.icon}" alt="" width="18" height="18" />` : '';
+    // 只有"还没画过"的行才带 .enter：整表重绘（排序、展开、新结果插入）时，
+    // 已经在屏幕上的行不该重放一次入场动画。
+    const entering = !row.painted;
+    row.painted = true;
+    const classes = [];
+    if (expanded) classes.push('expanded');
+    if (entering) classes.push('enter');
     parts.push(
-      `<tr data-path="${escapeHtml(row.path)}"${expanded ? ' class="expanded"' : ''}>
+      `<tr data-path="${escapeHtml(row.path)}"${classes.length ? ` class="${classes.join(' ')}"` : ''}>
         <td class="icon">${icon}</td>
         <td class="name" title="${escapeHtml(row.name)}">${escapeHtml(row.name)}</td>
         <td><span class="tag" style="background:${color}" title="${escapeHtml(detail)}">${escapeHtml(row.kind)}</span></td>
@@ -179,11 +210,75 @@ function setScanning(value) {
   button.textContent = value ? '扫描中…' : '开始扫描';
 }
 
+/** 结果到达。经典模式下先进队列，由 revealTick 按节奏搬进 rows。 */
+function pushRow(row) {
+  if (!classicMode) {
+    row.painted = true; // 不做入场动画，直接就是"已画过"
+    rows.push(row);
+    sortRows();
+    scheduleRender();
+    status.textContent = `已找到 ${rows.length} 个…`;
+    return;
+  }
+  row.painted = false;
+  revealQueue.push(row);
+  startReveal();
+}
+
+function startReveal() {
+  if (revealTimer !== null) return;
+  revealTimer = setInterval(revealTick, REVEAL_STEP_MS);
+  revealTick(); // 第一条不等，立刻出
+}
+
+function revealTick() {
+  const pending = revealQueue.length;
+  if (pending === 0) {
+    stopReveal();
+    // 队列清空才轮到汇总上场，否则会出现"已完成"和还在往外浮的结果同框。
+    if (deferredDone !== null) {
+      const payload = deferredDone;
+      deferredDone = null;
+      applyDone(payload);
+    }
+    return;
+  }
+  // 积压越多一次搬得越多：总揭示时长收敛在 REVEAL_BUDGET_MS 以内。
+  const step = Math.max(1, Math.ceil((pending * REVEAL_STEP_MS) / REVEAL_BUDGET_MS));
+  for (let i = 0; i < step && revealQueue.length > 0; i += 1) {
+    rows.push(revealQueue.shift());
+  }
+  sortRows();
+  render();
+  status.textContent = `已找到 ${rows.length} 个…`;
+}
+
+function stopReveal() {
+  if (revealTimer !== null) {
+    clearInterval(revealTimer);
+    revealTimer = null;
+  }
+}
+
+function applyDone(event) {
+  summary.hidden = false;
+  document.getElementById('sum-apps').textContent = String(event.apps);
+  document.getElementById('sum-total').textContent = humanSize(event.totalBytes);
+  document.getElementById('sum-sum').textContent = humanSize(event.sumBytes);
+  document.getElementById('sum-backend').textContent = backendLabel(event.backend);
+  document.getElementById('sum-elapsed').textContent = `${event.elapsedMs} ms`;
+  status.textContent = rows.length === 0 ? '没有找到应用' : `完成，共 ${rows.length} 个`;
+  setScanning(false);
+}
+
 async function runScan() {
   if (scanning) return;
   setScanning(true);
   rows = [];
   expandedPaths.clear();
+  stopReveal();
+  revealQueue = [];
+  deferredDone = null;
   render();
   summary.hidden = true;
   status.textContent = '扫描中…';
@@ -199,24 +294,21 @@ async function runScan() {
     if (event.type === 'item') {
       // Item 事件的载荷就是 AppRow 本身，type 字段由 serde 打标签注入。
       const { type, ...row } = event;
-      rows.push(row);
-      sortRows();
-      scheduleRender();
-      status.textContent = `已找到 ${rows.length} 个…`;
+      pushRow(row);
       return;
     }
     if (event.type === 'done') {
-      summary.hidden = false;
-      document.getElementById('sum-apps').textContent = String(event.apps);
-      document.getElementById('sum-total').textContent = humanSize(event.totalBytes);
-      document.getElementById('sum-sum').textContent = humanSize(event.sumBytes);
-      document.getElementById('sum-backend').textContent = backendLabel(event.backend);
-      document.getElementById('sum-elapsed').textContent = `${event.elapsedMs} ms`;
-      status.textContent = rows.length === 0 ? '没有找到应用' : `完成，共 ${rows.length} 个`;
-      setScanning(false);
+      if (revealQueue.length > 0 || revealTimer !== null) {
+        deferredDone = event;
+        return;
+      }
+      applyDone(event);
       return;
     }
     if (event.type === 'error') {
+      stopReveal();
+      revealQueue = [];
+      deferredDone = null;
       // 失败时后端名可能还停在"检测中"，别让它挂着误导人。
       backendDisplay.textContent = '自动（未确定）';
       status.textContent = `失败：${event.message}`;
@@ -248,6 +340,28 @@ function bootstrap() {
   button.addEventListener('click', () => void runScan());
   rootInput.addEventListener('keydown', (event) => {
     if (event.key === 'Enter') void runScan();
+  });
+
+  // 经典模式只影响外观和揭示节奏，不影响任何检测结果，所以中途切换是安全的。
+  classicInput.addEventListener('change', () => {
+    classicMode = classicInput.checked;
+    document.documentElement.classList.toggle('classic', classicMode);
+    if (!classicMode) {
+      // 关掉时把还在排队的结果一次性放出来，别让它们憋着。
+      stopReveal();
+      while (revealQueue.length > 0) {
+        const row = revealQueue.shift();
+        row.painted = true;
+        rows.push(row);
+      }
+      sortRows();
+      render();
+      if (deferredDone !== null) {
+        const payload = deferredDone;
+        deferredDone = null;
+        applyDone(payload);
+      }
+    }
   });
 
   body.addEventListener('click', (event) => {
