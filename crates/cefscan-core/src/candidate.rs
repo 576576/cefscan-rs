@@ -1,7 +1,4 @@
 //! 候选文件名的判定。
-//!
-//! 这套判定是扫描成本的源头：遍历上百万条路径，只有极少数会被采纳，
-//! 后续的二进制签名扫描只作用在这些候选所在的目录上。
 
 #[cfg(any(target_os = "windows", target_os = "macos"))]
 use std::borrow::Cow;
@@ -16,7 +13,6 @@ use crate::model::CandidateKind;
 /// 在 Windows / macOS 上按 ASCII 小写比较（文件系统大小写不敏感），
 /// 在 Linux 上大小写敏感。
 pub fn classify_candidate_name(name: &OsStr) -> Option<CandidateKind> {
-    // `lowered` 得活到 `name` 用完为止，所以不能收进块里；Linux 上压根不构造它。
     #[cfg(any(target_os = "windows", target_os = "macos"))]
     let lowered: Cow<'_, OsStr> = match name.to_str() {
         Some(text) => Cow::Owned(OsString::from(text.to_ascii_lowercase())),
@@ -27,7 +23,7 @@ pub fn classify_candidate_name(name: &OsStr) -> Option<CandidateKind> {
     #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     let name = name.as_encoded_bytes();
 
-    // `chrome_100_percent.pak`：Chromium 系通用的资源包，Electron/CEF/Chrome 都带。
+    // `chrome_100_percent.pak`：Chromium 系通用的资源包。
     if contains_bytes(name, b"_100_") && name.ends_with(b".pak") {
         return Some(CandidateKind::Pak);
     }
@@ -106,9 +102,6 @@ mod tests {
 
     #[test]
     fn framework_names_are_recognised() {
-        // 表格里存的是小写形式。`.framework` 是 macOS 的目录名，真实拼写带大写和空格，
-        // 能命中是因为 Windows/macOS 的文件系统大小写不敏感、判定前会先小写化。
-        // Linux 上刻意不小写化，只有全小写的拼写才命中——这个拼写在 Linux 上也不会出现。
         assert_eq!(
             class("chromium embedded framework"),
             Some(CandidateKind::Cef)

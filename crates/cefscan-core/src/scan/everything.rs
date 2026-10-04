@@ -1,13 +1,4 @@
 //! Everything IPC 后端（仅 Windows）。
-//!
-//! Everything 维护着一份全盘索引，查询是毫秒级的；代价是必须安装并运行
-//! Everything（精简版没有 IPC，不支持）。拿不到结果时调用方会回落到文件系统遍历。
-//!
-//! 协议要点（<https://www.voidtools.com/support/everything/sdk/ipc/>）：
-//! - 用 `WM_COPYDATA`（`dwData = 2`）把查询发给 Everything 的隐藏窗口
-//! - 查询体是 5 个 `u32` 头 + UTF-16 NUL 结尾的搜索串
-//! - Everything 用 `WM_COPYDATA` 把结果发回我们提供的回复窗口
-//! - 回复体是 7 个 `u32` 头 + 每项 3 个 `u32`（flags / 文件名偏移 / 路径偏移）
 
 use std::ffi::OsString;
 use std::io;
@@ -31,7 +22,7 @@ use crate::candidate::classify_candidate_name;
 use crate::filter::Filter;
 use crate::model::{Candidate, ScanOptions};
 
-/// 索引服务的展示名。进结果里给用户看，所以不用内部代号 "index"。
+/// 索引服务的展示名。
 pub const SERVICE_NAME: &str = "Everything";
 
 /// Everything 各版本的隐藏窗口类名，按兼容性顺序探测。
@@ -53,21 +44,12 @@ const MAX_ITEM_COUNT: usize = 1_000_000;
 
 /// 索引服务是否在场。
 ///
-/// 只看隐藏窗口在不在，**不发查询**。这是刻意为之：真发一次查询要等回复或等
-/// `index_timeout`（默认 1.5 s），而 GUI 的工具栏 chip 每次进工具模式/被点一下
-/// 都要刷一次，卡 1.5 s 是不可接受的。
-///
-/// 代价是它只回答"服务在不在"，不保证那次查询一定成功——窗口在但 Everything
-/// 卡死时这里照样报 true。让 UI 探针复现一次真实查询的成败，就得让 UI 等一次
-/// 真实查询，这个取舍不划算。
+/// 只看隐藏窗口在不在，**不发查询**。
 pub fn is_service_available() -> bool {
     find_service_window().is_some()
 }
 
 /// 按兼容性顺序找 Everything 的隐藏窗口。
-///
-/// 探测（[`is_service_available`]）和真查询（[`query_candidates`]）都走这里，
-/// 保证"报得出来的服务"和"问得到的服务"永远是同一个。
 fn find_service_window() -> Option<HWND> {
     EVERYTHING_WINDOW_CLASSES.iter().find_map(|class| {
         let class = to_wide_z(class);
@@ -118,9 +100,7 @@ pub fn query_candidates(options: &ScanOptions) -> io::Result<(Vec<Candidate>, &'
         .ok_or_else(|| io::Error::new(io::ErrorKind::TimedOut, "Everything did not reply"))?;
 
     let items = parse_reply(&bytes)?;
-    // 索引是**全盘**的，而 `--root` 和排除规则是给遍历阶段准备的剪枝条件。
-    // 走索引后端时没有遍历可剪，必须在结果侧再筛一遍，否则
-    // `--backend index --root C:\Users\me` 会把整个磁盘的结果都吐出来。
+    // 索引是全盘的，排除规则需在结果侧再筛一遍。
     let filter = Filter::new(options);
     let mut candidates = Vec::with_capacity(items.len().min(1024));
     for item in items {
@@ -140,7 +120,7 @@ pub fn query_candidates(options: &ScanOptions) -> io::Result<(Vec<Candidate>, &'
         if !filter.allows_path(&path) {
             continue;
         }
-        // 索引可能过期；只接受仍然存在的路径。候选数量很少，这点开销可以忽略。
+        // 索引可能过期，只接受仍然存在的路径。
         if path.is_file() {
             candidates.push(Candidate { path, kind });
         }
@@ -248,10 +228,6 @@ fn to_wide(text: &str) -> Vec<u16> {
 }
 
 /// 转成 UTF-16 并补上 NUL 结尾。
-///
-/// Win32 里凡是收 `PCWSTR` 的参数（`FindWindowW` 的类名、`WNDCLASSEXW.lpszClassName`）
-/// 都要求 NUL 结尾；漏了不会报错，只会静默匹配不上——所以单独一个函数，
-/// 避免和"要拿 `Vec<u16>` 去构造 `OsString`"的场景混用。
 fn to_wide_z(text: &str) -> Vec<u16> {
     let mut units = to_wide(text);
     units.push(0);
@@ -318,7 +294,7 @@ impl ReplyWindow {
             );
         }
 
-        // Everything 可能是更高完整性级别启动的；放开过滤器才收得到 WM_COPYDATA。
+        // 放开消息过滤器以接收 WM_COPYDATA。
         let _ = unsafe {
             windows_sys::Win32::UI::WindowsAndMessaging::ChangeWindowMessageFilterEx(
                 handle,
@@ -392,7 +368,6 @@ unsafe extern "system" fn window_proc(
     _wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
-    // 2024 edition 要求 unsafe fn 内部也显式写出 unsafe 块。
     unsafe {
         if message == WM_COPYDATA {
             let copy_data = lparam as *const COPYDATASTRUCT;
@@ -410,7 +385,7 @@ unsafe extern "system" fn window_proc(
                         if let Ok(mut guard) = slot.lock() {
                             *guard = Some(bytes);
                         }
-                        // 归还所有权：窗口存活期间 user data 里的 Arc 必须一直有效。
+                        // 归还所有权。
                         let _ = Arc::into_raw(slot);
                     }
                 }
@@ -459,7 +434,6 @@ mod tests {
     #[test]
     fn only_the_c_string_helper_appends_a_nul() {
         // Win32 的 PCWSTR 参数要求 NUL 结尾，而 `OsString::from_wide` 不要。
-        // 两者混用只会静默失败（FindWindowW 找不到窗口），所以钉死这个区别。
         assert_eq!(to_wide("ab"), vec![0x61, 0x62]);
         assert_eq!(to_wide_z("ab"), vec![0x61, 0x62, 0x00]);
         assert_eq!(to_wide_z(""), vec![0x00]);

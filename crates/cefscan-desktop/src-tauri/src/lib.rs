@@ -1,8 +1,4 @@
-//! `cefscanw` 的 Tauri 2 外壳。
-//!
-//! 这里不含任何检测逻辑，只做三件事：接受前端的扫描请求、把 `cefscan-core`
-//! 的结果流式推给前端、处理"在资源管理器中显示"。
-//! GUI 与 CLI 是两个独立二进制，各自静态链接 core，互不依赖。
+//! `cefscanw` 的 Tauri 2 外壳：接受前端的扫描请求、把 `cefscan-core` 的结果流式推给前端、处理"在资源管理器中显示"。
 
 use std::path::PathBuf;
 
@@ -16,8 +12,7 @@ mod icon;
 #[serde(rename_all = "camelCase")]
 pub struct ScanRequest {
     pub roots: Vec<String>,
-    /// 搜索后端。GUI 不再提供选择，永远发 `auto`；字段留着是为了让这个命令
-    /// 对脚本/其它调用方仍然是完整的（与 CLI 的 `--backend` 取值一致）。
+    /// 搜索后端，取值与 CLI 的 `--backend` 一致。
     pub backend: Option<String>,
     pub threads: Option<usize>,
 }
@@ -38,9 +33,6 @@ pub struct AppRow {
 }
 
 /// `detect_backend` 的返回值。
-///
-/// 用结构体而不是裸字符串，是为了和 `ScanEvent::Started` 保持同一个形状：
-/// 前端两处读到的东西长一样，`probe.backend` 和 `event.backend` 可以互换着用。
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BackendProbe {
@@ -66,10 +58,6 @@ impl From<AppInfo> for AppRow {
 #[serde(rename_all = "camelCase", tag = "type")]
 pub enum ScanEvent {
     /// 后端刚选定，**先于任何结果**送达。
-    ///
-    /// 前端靠它把工具栏上的"自动"变成"自动（cefscan）"/"自动（Everything）"。
-    /// 没有这个事件的话，用户只能等扫描结束才从汇总里看到后端是谁，
-    /// 那"自动"这个选项就不可信了。
     Started {
         backend: String,
     },
@@ -89,14 +77,6 @@ pub enum ScanEvent {
 }
 
 /// 探测"这次扫描会选哪个后端"，**不扫描、不查询索引服务**。
-///
-/// 报的名字和 `ScanEvent::Started` 是同一个，区别只在时机：那个要等真开扫
-/// （`discover()` 挑完后端）才知道，这个在开扫之前就能问。GUI 进工具模式时刷一次、
-/// 用户点一下后端 chip 再刷一次，于是"自动"不用等用户点"开始扫描"才现出原形。
-///
-/// 传整个 `request` 而不是单给一个 backend 字符串：探的是"**你即将用的那份参数**
-/// 会选谁"，所以前端把同一个 `ScanRequest` 先交给这里、再交给 `scan_apps`，
-/// chip 上写的和结果里报的不可能对不上。
 #[tauri::command]
 async fn detect_backend(request: Option<ScanRequest>) -> Result<BackendProbe, String> {
     let options = to_options(&request.unwrap_or_else(empty_request));
@@ -113,12 +93,9 @@ async fn scan_apps(
 ) -> Result<(), String> {
     let options = to_options(&request.unwrap_or_else(empty_request));
 
-    // Channel 不是 Copy，闭包要 move 进去，所以两个回调各克隆一份；
-    // 外层保留原件发 Done / Error。
     let item_channel = channel.clone();
     let notice_channel = channel.clone();
     let outcome = tauri::async_runtime::spawn_blocking(move || {
-        // CPU/IO 密集，必须走 spawn_blocking，不能堵住 async 运行时。
         cefscan_core::scan_streaming(
             &options,
             |app| {
@@ -173,8 +150,7 @@ fn empty_request() -> ScanRequest {
 fn to_options(request: &ScanRequest) -> ScanOptions {
     let backend = match request.backend.as_deref() {
         Some("index") => Backend::Index,
-        // `filesystem` 是改名前的旧值，留作兼容。
-        Some("cefscan" | "filesystem") => Backend::Filesystem,
+        Some("cefscan") => Backend::Filesystem,
         _ => Backend::Auto,
     };
     let threads = request.threads.unwrap_or(0);
@@ -197,7 +173,6 @@ fn reveal_in_explorer(path: &std::path::Path) -> Result<(), String> {
     use windows_sys::Win32::UI::Shell::ShellExecuteW;
     use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
 
-    // 路径带空格时必须整体加引号，否则 explorer 会把参数拆开。
     let argument: Vec<u16> = OsStr::new("/select,\"")
         .encode_wide()
         .chain(path.as_os_str().encode_wide())
@@ -262,10 +237,7 @@ fn _assert_stats_used(stats: &ScanStats) -> u64 {
 mod tests {
     use super::*;
 
-    /// `ScanEvent` 的线上格式是**前端唯一依赖的契约**（`main.js` 里读
-    /// `event.type` / `event.backend` / `event.totalBytes` …），但它跨的是
-    /// Rust↔JS 这道没有类型检查的边界：改名或漏掉 `camelCase` 都不会有编译错误，
-    /// 只会让界面静默失灵。所以这里把格式钉死。
+    /// 钉死 `ScanEvent` 的线上格式。
     #[test]
     fn scan_events_keep_their_wire_format() {
         let json = |event: &ScanEvent| serde_json::to_value(event).unwrap();
@@ -304,8 +276,7 @@ mod tests {
             serde_json::json!({ "type": "error", "message": "boom" })
         );
 
-        // `Item` 是 newtype variant：内部标签模式下会把 AppRow 摊平，
-        // 所以前端拿到的是"AppRow 本身 + 一个 type 字段"。
+        // `Item` 是 newtype variant，内部标签模式下会把 AppRow 摊平。
         let item = json(&ScanEvent::Item(AppRow {
             path: r"C:\a\Demo.exe".into(),
             root: r"C:\a".into(),
@@ -323,7 +294,7 @@ mod tests {
         assert!(item["icon"].is_null());
     }
 
-    /// `BackendProbe` 也是跨 Rust↔JS 的线上契约，同样没有类型检查兜底。
+    /// 钉死 `BackendProbe` 的线上格式。
     #[test]
     fn backend_probe_keeps_its_wire_format() {
         assert_eq!(
@@ -335,8 +306,7 @@ mod tests {
         );
     }
 
-    /// 后端的字符串取值是机器接口（与 CLI 的 `--backend` 对齐）。
-    /// 认错了不会报错，只会**悄悄换一个后端**，所以把映射钉死。
+    /// 后端字符串取值与 CLI 的 `--backend` 对齐，把映射钉死。
     #[test]
     fn request_backend_values_map_to_the_documented_enum() {
         let backend_of = |value: Option<&str>| {
@@ -350,10 +320,9 @@ mod tests {
 
         assert_eq!(backend_of(None), Backend::Auto);
         assert_eq!(backend_of(Some("auto")), Backend::Auto);
-        assert_eq!(backend_of(Some("index")), Backend::Index);
         assert_eq!(backend_of(Some("cefscan")), Backend::Filesystem);
-        // `filesystem` 是改名前的旧值，留作兼容，不该再出现在文档里。
-        assert_eq!(backend_of(Some("filesystem")), Backend::Filesystem);
+        assert_eq!(backend_of(Some("index")), Backend::Index);
+        assert_eq!(backend_of(Some("filesystem")), Backend::Auto);
         // 认不出来的值退回默认，而不是报错。
         assert_eq!(backend_of(Some("whatever")), Backend::Auto);
     }

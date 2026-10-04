@@ -1,20 +1,12 @@
-// cefscanw 前端。刻意不引入任何打包工具：这里只有浏览器原生 API +
-// Tauri 注入的 window.__TAURI__ 全局对象（tauri.conf.json 里 withGlobalTauri = true），
-// 所以整个 GUI 用 `cargo build --release` 就能产出，不需要 Node/npm。
-//
-// 三个视图共用一个数据源 `rows`：扫描结果永远往 `rows` 里堆，表格和卡片墙各自
-// 只是它的一种画法。这样切视图不需要重扫，也不会出现"两个视图各记一份、慢慢对不上"。
+// cefscanw 前端：浏览器原生 API + Tauri 注入的 window.__TAURI__ 全局对象
+// （tauri.conf.json 里 withGlobalTauri = true）。
 
 const MAX_ITEMS = 500;
 
 /** 折叠路径时前面保留的目录层数（盘符 / UNC 根不计入）。 */
 const PATH_HEAD_SEGMENTS = 3;
 
-/**
- * 后端显示文案。后端是自动挑的（有索引服务就用，没有就自己遍历），
- * 所以前缀固定是"自动"；真正有信息量的是括号里的**具体后端名**
- * （`cefscan` / `Everything`），而不是"遍历"/"索引"这类内部叫法。
- */
+/** 后端显示文案：前缀固定是"自动"，括号里是具体后端名。 */
 const BACKEND_PENDING = '自动（待检测）';
 const BACKEND_UNKNOWN = '自动（未确定）';
 
@@ -22,24 +14,7 @@ function backendLabel(name) {
   return `自动（${name}）`;
 }
 
-/**
- * 经典模式卡片"缓缓浮现"的节奏。
- *
- * 为什么要排队而不是收到就画：索引后端会在几百毫秒内一次吐出几十条结果，
- * 如果直接画出来，用户看到的是一整面墙同时"啪"地出现——只有遍历后端那种
- * 天然一条条到达的节奏才自带"缓缓出现"的观感。排队 + 固定节奏让两种后端
- * 看起来一致。
- *
- * REVEAL_MAX_PER_TICK 是**硬上限**：不管积压多少，一拍最多搬这么多张。用户明确
- * 要"最大出现速度"，因为之前只有下面那个预算、没有上限——66 条时一拍 2 张还行，
- * 500 条时预算会把一拍推到 15 张，观感就是"唰"地一下全出来，一点仪式感都没有。
- * 上限一卡，速度就恒定了：3 张 / 150ms = 20 张/秒。
- *
- * REVEAL_BUDGET_MS 是另一半：它只负责让**总时长**别失控。step 取两者的交集——
- * 按预算算出来要搬几张，但绝不超过上限。66 条时预算算出来是 1 张/拍（约 10 秒
- * 放完），500 条时是 7 张/拍、被上限砍到 3 张（约 25 秒）。没有上限就只有
- * "快"，没有预算就只有"慢到没法用"，两个都要。
- */
+/** 卡片逐张揭示：每拍间隔 150 ms，总时长预算 12000 ms，每拍最多 3 张。 */
 const REVEAL_STEP_MS = 150;
 const REVEAL_BUDGET_MS = 12000;
 const REVEAL_MAX_PER_TICK = 3;
@@ -47,19 +22,11 @@ const REVEAL_MAX_PER_TICK = 3;
 /** 自动跟随的容差：滚到离底部这么近就算"回到底了"，重新开始跟随。 */
 const FOLLOW_SLACK = 24;
 
-/**
- * 卡片墙自动跟随的**速度上限**（px/秒）。
- *
- * 为什么不用 `scrollTo({ behavior: 'smooth' })`：它的速度由浏览器定、没法调，
- * 结果一多就是"唰"地一下滑到底（用户原话是"没有仪式感"）；而且它是**异步**的，
- * `scrollTop` 不会立刻变——想按位置限速（"一次最多往前一行"）根本配合不了：
- * 位置还没动，下一帧算出来的目标又是同一个，会被"目标没变就跳过"挡掉，
- * 墙干脆一动不动。所以自己按帧推：位置由我们写，下一帧读到的就是真位置。
- */
+/** 卡片墙自动跟随的速度上限（px/秒）。 */
 const SCROLL_MAX_PX_PER_SEC = 340;
-/** 收尾减速的参考距离：剩余不足这么多就按比例放慢，免得"咔"地停住。 */
+/** 收尾减速的参考距离（px）：剩余不足这么多就按比例放慢。 */
 const SCROLL_EASE_PX = 90;
-/** 收尾时的最低速度，免得最后几像素爬半天。 */
+/** 收尾时的最低速度（px/秒）。 */
 const SCROLL_MIN_PX_PER_SEC = 70;
 
 const KIND_COLORS = {
@@ -88,10 +55,7 @@ const rootInput = document.getElementById('root-input');
 const backendDisplay = document.getElementById('backend-display');
 const summary = document.getElementById('summary');
 
-/**
- * 状态行按 class 一把改掉，但**不含经典模式那条条数**——它有自己的文案格式
- * （见 renderCards），挂在 `#classic-count` 上，不是 `.status-text`。
- */
+/** 状态行节点（按 class 选择，不含经典模式那条条数）。 */
 const statusNodes = document.querySelectorAll('.status-text');
 
 // 由 tauri.conf.json 的 withGlobalTauri = true 注入；在普通浏览器里打开时为 undefined。
@@ -115,16 +79,11 @@ let revealTimer = null;
 /** 卡片还在往外浮时先压住的汇总，等队列清空再显示。 */
 let deferredDone = null;
 
-/**
- * 卡片墙是否跟着最新一行走。
- *
- * 用户往上滚就停（他在翻看旧结果，别跟他抢滚动条），滚回底部再自动恢复。
- */
+/** 卡片墙是否跟着最新一行走：用户往上滚就停，滚回底部再恢复。 */
 let autoFollow = true;
 /** 上一次自动跟随的目标，用来避免重复发起同一个滚动。 */
 let lastFollowTarget = -1;
-/** 上一次观察到的滚动位置，只用来判断"这次是往上还是往下"。**只由 scroll 监听写**，
- *  自己驱动的滚动动画绝不能碰它——否则动画写的值和事件里的值交错，"往上滚"会误判。 */
+/** 上一次观察到的滚动位置，用来判断这次是往上还是往下。 */
 let lastScrollTop = 0;
 
 /** 正在滚向的目标；null = 没在滚。 */
@@ -132,7 +91,7 @@ let scrollTarget = null;
 let scrollRaf = 0;
 let scrollTs = 0;
 
-/** 已展开路径的行。用 Set 而不是给 <tr> 挂 class，是因为流式扫描会整表重绘。 */
+/** 已展开路径的行。 */
 const expandedPaths = new Set();
 
 /** 1024 进制的人类可读体积，与 CLI 的 human_size 保持一致。 */
@@ -163,7 +122,7 @@ function prefersReducedMotion() {
   );
 }
 
-/** 停下自己驱动的滚动动画。用户往上滚、开始新扫描、开新视图时都要叫一下。 */
+/** 停下自己驱动的滚动动画。 */
 function stopScroll() {
   if (scrollRaf) cancelAnimationFrame(scrollRaf);
   scrollRaf = 0;
@@ -171,18 +130,11 @@ function stopScroll() {
   scrollTs = 0;
 }
 
-/**
- * 滚动动画的一帧。
- *
- * 位置是我们自己写进 `cards.scrollTop` 的，所以下一帧读到的就是真位置——不会像
- * 浏览器平滑滚动那样"目标没变但位置还没动"，也就不需要任何限速用的花招。
- * 动画会一直自我续帧到追上目标为止，所以揭示队列放完之后它还能自己把墙补上去。
- */
+/** 滚动动画的一帧。 */
 function scrollFrame(ts) {
   scrollRaf = 0;
   if (scrollTarget === null) return;
-  // 帧间隔夹在 [1, 64] ms：标签页切回来时 ts 会跳一大截，不夹的话会一次冲到底。
-  // 桩里的 rAF 回调不带时间戳，用 16ms 兜底。
+  // 帧间隔夹在 [1, 64] ms；无有效时间戳时用 16 ms 兜底。
   const dt = Number.isFinite(ts) && scrollTs ? Math.min(64, ts - scrollTs) : 16;
   scrollTs = Number.isFinite(ts) ? ts : 0;
 
@@ -193,7 +145,7 @@ function scrollFrame(ts) {
     scrollTarget = null;
     return;
   }
-  // 上限 + 收尾减速：剩余越少越慢（但有下限），看上去像自然滑停而不是"咔"地截断。
+  // 上限 + 收尾减速：剩余越少越慢，但有下限。
   const speed = Math.min(
     SCROLL_MAX_PX_PER_SEC,
     Math.max(SCROLL_MIN_PX_PER_SEC, (Math.abs(remaining) / SCROLL_EASE_PX) * SCROLL_MAX_PX_PER_SEC)
@@ -222,9 +174,6 @@ function setStatus(text) {
  *
  *   C:\Users\16695\AppData\Local\Programs\WorkBuddy\WorkBuddy.exe
  *   → C:\Users\16695\AppData\…\WorkBuddy.exe
- *
- * 按分隔符切段而不是按字符数切，这样尾部的文件名一定完整。
- * 盘符（`C:`）和 UNC 的空段都算"根"，不占目录层数。
  */
 function foldPath(path) {
   const separator = path.includes('\\') ? '\\' : '/';
@@ -232,7 +181,7 @@ function foldPath(path) {
   const head = segments.slice(0, PATH_HEAD_SEGMENTS + 1).join(separator);
   const tail = segments[segments.length - 1];
   const folded = `${head}${separator}…${separator}${tail}`;
-  // 短路径折完反而更长，那就别折。
+  // 折完反而更长时保留原路径。
   return folded.length < path.length ? folded : path;
 }
 
@@ -247,7 +196,7 @@ function pathCellHtml(path, expanded) {
   );
 }
 
-/** 只重画一行的路径单元格——展开/收起不该触发整表重绘。 */
+/** 只重画一行的路径单元格。 */
 function paintPathCell(row) {
   const cell = row.querySelector('td.path');
   if (!cell) return;
@@ -257,14 +206,7 @@ function paintPathCell(row) {
   cell.innerHTML = pathCellHtml(path, expanded);
 }
 
-/**
- * 按当前排序键返回**排好序的副本**（工具页用）。
- *
- * 关键在"副本"两个字：`rows` 的原始顺序是**扫描结果的到达顺序**，经典模式的卡片墙
- * 靠它保持"卡片弹出的先后位置"——用户明确要求卡片墙**不跟随**工具页的排序（在工具页
- * 点了表头，切回经典页时顺序不该变）。所以排序只发生在工具页自己的渲染里，本源顺序
- * 谁都不许动。原地排 `rows` 会让两个视图互相干扰。
- */
+/** 按当前排序键返回排好序的副本（工具页用）。 */
 function sortedRows() {
   return rows.slice().sort((left, right) => {
     let order;
@@ -284,7 +226,7 @@ function sortedRows() {
       default:
         order = left.path.localeCompare(right.path);
     }
-    // 主键相同时用路径兜底，保证排序结果稳定、不会因为流式插入而抖动。
+    // 主键相同时用路径兜底。
     if (order === 0) order = left.path.localeCompare(right.path);
     return sortAscending ? order : -order;
   });
@@ -298,9 +240,6 @@ function render() {
   } else if (view === 'classic') {
     renderCards();
   }
-  // view === null（初始选择页）时什么都不画。这种状态下到达的结果已经由 pushRow
-  // 标成 painted、直接进了 rows，所以等用户再进某个视图时是一次画完、不补动画——
-  // 他本来也没在看，没必要让两百张卡片一起演一遍入场。
 }
 
 /** 流式扫描时每条结果都会触发重绘，用 rAF 合并成每帧最多一次。 */
@@ -313,8 +252,7 @@ function scheduleRender() {
 function renderTable() {
   empty.hidden = rows.length > 0;
 
-  // 全盘扫描可能有上千条结果，只渲染前 MAX_ITEMS 条，避免 DOM 过大拖慢 WebView。
-  // 排序在这里做（对副本），`rows` 本身保持到达顺序——见 `sortedRows`。
+  // 只渲染前 MAX_ITEMS 条；排序对副本做，`rows` 本身保持到达顺序。
   const visible = sortedRows().slice(0, MAX_ITEMS);
   const parts = [];
   for (const row of visible) {
@@ -322,8 +260,7 @@ function renderTable() {
     const detail = row.evidence ? `${row.kind} · ${row.evidence}` : row.kind;
     const expanded = expandedPaths.has(row.path);
     const icon = row.icon ? `<img src="${row.icon}" alt="" width="18" height="18" />` : '';
-    // 工具模式不做入场动画（"缓缓浮现"是经典模式卡片墙的事），但标记还是要打上：
-    // 之后切到经典模式时，这些行不该再演一遍入场。
+    // 工具模式不做入场动画，但仍标记为已画过。
     row.painted = true;
     parts.push(
       `<tr data-path="${escapeHtml(row.path)}"${expanded ? ' class="expanded"' : ''}>
@@ -344,8 +281,7 @@ function renderTable() {
   body.innerHTML = parts.join('');
 }
 
-/** 卡片里的图标。取不到图标时留一个同样大小的空槽，卡片高度才不会参差不齐。
- *  32px 这个数字跟 styles.css 的 .card-icon 和 --card-h 是绑死的，改一处要改两处。 */
+/** 卡片里的图标；取不到图标时留一个同样大小的空槽。 */
 function cardIconHtml(row) {
   const icon = row.icon
     ? `<img src="${row.icon}" alt="" width="32" height="32" />`
@@ -353,22 +289,20 @@ function cardIconHtml(row) {
   return row.running ? `${icon}<span class="dot" title="运行中"></span>` : icon;
 }
 
-/** 经典模式的条数文案。0 也照实说，所以不需要单独的空态。 */
+/** 经典模式的条数文案。 */
 function classicCountText(total) {
   return `您的电脑里有 ${total} 个 Chromium`;
 }
 
 function renderCards() {
-  // 条数在**顶部区域**（喜报"喜报"两字正下方），不在滚动区里，所以每次重绘都刷一次。
+  // 条数在顶部区域，每次重绘都刷一次。
   classicCount.textContent = classicCountText(rows.length);
 
-  // 卡片墙**按到达顺序**排，不做任何排序：每张新卡片都追加在末尾，"一张张浮现"的
-  // 先后位置就与它出现的时间一致。这也是用户明确要的——卡片墙不跟随工具页的排序，
-  // 在工具页点了表头、切回经典页时卡片的相对位置不变。所以 `rows` 的本源顺序不能动。
+  // 卡片墙按到达顺序排，不做排序。
   const visible = rows.slice(0, MAX_ITEMS);
   const parts = [];
   for (const row of visible) {
-    // 同表格：只有还没画过的卡片才带 .enter，整墙重绘不会让老卡片重放动画。
+    // 只有还没画过的卡片才带 .enter。
     const entering = !row.painted;
     row.painted = true;
     const path = escapeHtml(row.path);
@@ -387,29 +321,7 @@ function renderCards() {
   followNewest();
 }
 
-/**
- * 把滚动位置对齐到整行，并平滑跟到最新一行。
- *
- * 三件事必须一起做，少一件都会看出破绽：
- *
- * 1. **量行距用 offsetHeight，不用 getBoundingClientRect**。新卡片正带着入场
- *    动画（`translateY(10px) scale(0.96)`），rect 返回的是**动画中的**几何，
- *    scale 会把 95px 的卡片量成 91px，行距随之算小、对齐全偏。offset* 是
- *    布局值，不受 transform 影响。
- * 2. **对齐要带上 padding-top**。行顶边在 `padding-top + k * 行距` 处，按纯
- *    `k * 行距` 对齐的话视口顶部会切掉小半行。顶部区域（图标胶囊 + 条数）现在挪到
- *    了 `#cards` 外面，所以这个 padding-top 是 0——但公式照旧得带上它，
- *    否则以后谁再往里加内边距就又错了。
- * 3. **底部内边距补足**，让最大滚动量正好等于对齐后的目标位置。不补的话目标
- *    超过最大滚动量会被浏览器夹回去，对齐白做——而且最后一行（正是"自动跟随
- *    最新"最该看清的那一行）会被视口底部切掉一截。补出来的量小于一个行距，
- *    又落在最后一行下方，视觉上看不出来。
- *
- * 目标是"最后一行完整可见 + 视口顶部是行顶边"这两个条件的**最小**解，所以
- * 内容每多一行，目标正好前进一个行距：看上去就是整行整行地往上走。
- * **速度由 `scrollCardsTo` 统一限死**（`SCROLL_MAX_PX_PER_SEC`），这里只管算目标：
- * 目标一次可以跳十几行，墙会自己按上限追上去。
- */
+/** 把滚动位置对齐到整行，并平滑跟到最新一行。 */
 function followNewest() {
   if (!autoFollow) return;
   const list = cards.querySelectorAll('.card');
@@ -418,15 +330,13 @@ function followNewest() {
   const style = getComputedStyle(cards);
   const padTop = Number.parseFloat(style.paddingTop) || 0;
   const currentPadBottom = Number.parseFloat(style.paddingBottom) || 0;
-  // 首次使用时把 CSS 里的底部内边距记下来当基准，免得 JS 和 CSS 各写一个数值、
-  // 改了其中一边对不上。基准只认第一次读到的值。
+  // 首次使用时把 CSS 的底部内边距记为基准。
   if (cards.dataset.basePadBottom === undefined) {
     cards.dataset.basePadBottom = String(currentPadBottom);
   }
   const basePadBottom = Number.parseFloat(cards.dataset.basePadBottom) || 0;
 
-  // 反推出"基准内边距下"的溢出量。这样它就跟当前 padding-bottom 无关了，
-  // 否则补一次内边距会改变 scrollHeight，下次再算又要改回去，来回震荡。
+  // 反推出基准内边距下的溢出量。
   const natural = cards.scrollHeight - cards.clientHeight - (currentPadBottom - basePadBottom);
   if (natural <= 0) {
     // 还没溢出一屏，什么都不用做（顺手把可能残留的补量清掉）。
@@ -468,23 +378,14 @@ function resetFollow() {
 
 function setScanning(value) {
   scanning = value;
-  // 只有工具模式那个按钮才是"扫描"动作：文案在"开始扫描 / 扫描中…"之间切、扫描时禁用。
+  // 工具模式的"扫描"按钮：文案在"开始扫描 / 扫描中…"之间切，扫描时禁用。
   scanButton.disabled = value;
   scanButton.textContent = value ? '扫描中…' : '开始扫描';
-  // 选择页那个按钮只是"进入某个视图"（进去不一定会扫，见 bootstrap），所以文案固定是
-  // "进入"、**扫描中也不禁用**——否则扫到一半从视图里点"返回"，就再也进不去了。
-  // 扫描中重复点是安全的：那个监听自己会 `if (rows.length > 0 || scanning) return`。
-  // 图标按钮不能走 `textContent = …` —— 会把图标本身抹掉，所以单独设 disabled。
+  // 刷新是图标按钮，单独设 disabled（不能走 textContent）。
   classicRefresh.disabled = value;
 }
 
-/**
- * 切换视图。
- *
- * 只有经典模式用喜报皮肤；初始选择页和工具模式都是深色。所以 html 上开局不带
- * 任何主题类（深色是 `:root` 的默认值），进经典模式才加上——也就不存在"脚本跑
- * 起来之前闪一下"的问题。
- */
+/** 切换视图。 */
 function showView(next) {
   view = next;
   picker.hidden = next !== null;
@@ -496,31 +397,20 @@ function showView(next) {
   if (next !== null) render();
 }
 
-/** 探测和扫描必须用**同一份参数**，否则 chip 上写的和结果里报的会对不上。 */
+/** 探测与扫描共用的请求参数。 */
 function currentRequest() {
   const root = rootInput.value.trim();
-  // backend 恒为 auto：界面上没有选项，挑选完全交给 core。
+  // backend 恒为 auto。
   return { roots: root ? [root] : [], backend: 'auto', threads: 0 };
 }
 
-/**
- * 写后端 chip 的唯一入口：**谁最后调用谁说了算**。
- *
- * 每次写入都把 epoch +1，`refreshBackend` 在 await 回来之后对不上号就丢弃自己的
- * 结果。没有这道闸的话，一次在途的探测会在扫描已经失败之后把"未确定"又盖回成一个
- * 后端名——用户看到的是"失败了，但后端是 cefscan"，自相矛盾。
- */
+/** 写后端 chip 的唯一入口；每次写入把 backendEpoch 加一。 */
 function setBackendLabel(text) {
   backendEpoch += 1;
   backendDisplay.textContent = text;
 }
 
-/**
- * 重新探测"这次扫描会用哪个后端"，把结果写进工具栏那个 chip。
- *
- * 进工具模式时探一次、用户点一下 chip 再探一次——**不等点"开始扫描"**。
- * "自动"要是个可信的选项，就得在开扫之前就能看到它选了谁。
- */
+/** 重新探测这次扫描会用哪个后端，把结果写进工具栏的 chip。 */
 async function refreshBackend() {
   if (!invoke) return;
   setBackendLabel(BACKEND_PENDING);
@@ -557,7 +447,7 @@ function revealTick() {
   const pending = revealQueue.length;
   if (pending === 0) {
     stopReveal();
-    // 队列清空才轮到汇总上场，否则会出现"已完成"和还在往外浮的结果同框。
+    // 队列清空后才轮到汇总。
     if (deferredDone !== null) {
       const payload = deferredDone;
       deferredDone = null;
@@ -565,8 +455,7 @@ function revealTick() {
     }
     return;
   }
-  // 积压越多一次搬得越多（总时长收敛在 REVEAL_BUDGET_MS 以内），但**绝不超过
-  // REVEAL_MAX_PER_TICK**——上限才是"仪式感"的保证，预算只是别让它拖到天荒地老。
+  // 按预算算每拍搬运量，但不超过 REVEAL_MAX_PER_TICK。
   const byBudget = Math.max(1, Math.ceil((pending * REVEAL_STEP_MS) / REVEAL_BUDGET_MS));
   const step = Math.min(byBudget, REVEAL_MAX_PER_TICK);
   for (let i = 0; i < step && revealQueue.length > 0; i += 1) {
@@ -590,8 +479,7 @@ function applyDone(event) {
   document.getElementById('sum-sum').textContent = humanSize(event.sumBytes);
   document.getElementById('sum-backend').textContent = backendLabel(event.backend);
   document.getElementById('sum-elapsed').textContent = `${event.elapsedMs} ms`;
-  // 这条状态行只服务选择页和工具模式。经典模式的结果显示是顶部那行条数
-  // （`renderCards` 负责），文案格式不一样，所以不在这里管它。
+  // 状态行只服务选择页和工具模式；经典模式的条数由 renderCards 负责。
   setStatus(
     rows.length === 0
       ? '没有找到应用'
@@ -616,8 +504,7 @@ async function runScan() {
   const channel = new Channel();
   channel.onmessage = (event) => {
     if (event.type === 'started') {
-      // 后端选定那一刻就发过来，比第一条结果早得多。进工具模式时已经探过一次，
-      // 所以这里通常是同一个值，作用只是把"探测"坐实成"实际用的"。
+      // 后端选定那一刻发来的 started 事件，写入 chip。
       setBackendLabel(backendLabel(event.backend));
       return;
     }
@@ -639,7 +526,7 @@ async function runScan() {
       stopReveal();
       revealQueue = [];
       deferredDone = null;
-      // 失败时后端名可能还停在"待检测"，别让它挂着误导人。
+      // 失败时把后端名置为未确定。
       setBackendLabel(BACKEND_UNKNOWN);
       setStatus(`失败：${event.message}`);
       setScanning(false);
@@ -663,26 +550,23 @@ function bootstrap() {
     return;
   }
 
-  // 初始选择页：选好模式再进去。**进去不等于重扫**——已经有结果（或正在扫）就只是
-  // 换个画法把同一份 `rows` 画出来，切模式不该把结果清掉、更不该重新扫一遍。
+  // 初始选择页：选好模式再进去；已有结果时只切画法，不重扫。
   startButton.addEventListener('click', () => {
     const chosen = document.querySelector('input[name="mode"]:checked');
     const next = chosen && chosen.value === 'tool' ? 'tool' : 'classic';
     showView(next);
 
     if (rows.length > 0 || scanning) return;
-    // 手上一条结果都没有时，只有经典模式顺手开扫——它除了那个刷新胶囊没有别的
-    // 扫描入口。工具模式不自动扫：它有自己的工具栏，得先让人把目录填了再按"开始扫描"。
+    // 没有结果时，经典模式顺手开扫；工具模式不自动扫。
     if (next === 'classic') void runScan();
   });
 
-  // 两个视图各自的"返回"：只切视图，**不打断正在跑的扫描**——结果照旧往 rows 里堆，
-  // 回到哪个视图都能看到。
+  // 两个视图的"返回"按钮：只切视图，不打断正在跑的扫描。
   for (const id of ['classic-back', 'tool-back']) {
     document.getElementById(id).addEventListener('click', () => showView(null));
   }
 
-  // 经典模式那个刷新胶囊 = 重扫一次（它取代了原来显示结果条数的那个胶囊）。
+  // 经典模式的刷新胶囊 = 重扫一次。
   classicRefresh.addEventListener('click', () => void runScan());
 
   scanButton.addEventListener('click', () => void runScan());
@@ -691,7 +575,7 @@ function bootstrap() {
     if (event.key === 'Enter') void runScan();
   });
 
-  // 卡片墙：点一张卡片 = 在资源管理器中定位它。用事件委托，整墙重绘不会丢监听。
+  // 点一张卡片 = 在资源管理器中定位它。
   cards.addEventListener('click', (event) => {
     const card = event.target.closest('.card');
     if (!card || !card.dataset.path) return;
@@ -700,16 +584,13 @@ function bootstrap() {
     });
   });
 
-  // 自动跟随的开关：只有"往上滚"才可能是用户干的（自动跟随永远向下滚），
-  // 所以按方向判断就够了。`lastScrollTop` **只在这里写**：滚动动画写的是 scrollTop
-  // 本身，如果它也去写 lastScrollTop，事件里的旧值和动画写的新值就会交错，
-  // 每一帧的向下滚动都会被误判成"用户往上滚"，跟随当场永久停摆。
+  // 自动跟随的开关：按滚动方向判断用户是否在往上滚；lastScrollTop 只在这里写。
   cards.addEventListener('scroll', () => {
     const top = cards.scrollTop;
     if (top < lastScrollTop - 2) {
       autoFollow = false;
       lastFollowTarget = -1;
-      // 用户要自己翻，正在跑的自动跟随动画立刻让位（不然会跟他抢滚动条）。
+      // 用户自己翻页时停掉正在跑的自动跟随动画。
       stopScroll();
     }
     const overflow = cards.scrollHeight - cards.clientHeight;
@@ -717,21 +598,14 @@ function bootstrap() {
     lastScrollTop = top;
   });
 
-  // 卡片墙的盒子一变（拖窗口、分屏、WebView 自己改尺寸），最大滚动量和"一行放几个"
-  // 都变了：原来的对齐作废，而且浏览器会把 scrollTop 夹回新的最大滚动量——视口顶部
-  // 就落在行中间了。所以重新对一次。
-  //
-  // 用 ResizeObserver 而不是 window 的 resize 事件：盯的是 #cards 自己的盒子，
-  // 覆盖面更广，而且回调本来就是按帧合并的，拖动窗口时不会每个像素都滚一下。
-  // 改 padding-bottom 不会反过来触发它——#cards 的高度由 flex 决定，内边距变了
-  // 盒子尺寸也不变，所以不会自己喂自己。
+  // 卡片墙尺寸变化时重新对齐一次。
   new ResizeObserver(() => {
     lastFollowTarget = -1;
     followNewest();
   }).observe(cards);
 
   body.addEventListener('click', (event) => {
-    // 展开后才出现的"在资源管理器中显示"按钮：拦下来，别让它顺带收起行。
+    // "在资源管理器中显示"按钮：拦下来，避免顺带收起行。
     const reveal = event.target.closest('[data-reveal]');
     if (reveal) {
       event.stopPropagation();
@@ -762,8 +636,7 @@ function bootstrap() {
         sortKey = key;
         sortAscending = false;
       }
-      // 只重画：`sortKey` / `sortAscending` 变了，`renderTable` 会重排一份副本。
-      // 这里**不碰 `rows`**，所以经典页的卡片顺序不受影响（用户明确要求）。
+      // 只重画：sortKey / sortAscending 变了，renderTable 会重排一份副本。
       render();
     });
   }

@@ -1,6 +1,5 @@
 <!doctype html>
-<!-- 初始选择页是深色的（不铺喜报），所以 html 上不预置任何主题类——深色就是默认。
-     进了经典模式才由脚本加上 classic；这样也不存在"脚本跑起来前闪一下"的问题。 -->
+<!-- html 上不预置主题类，深色为默认；经典模式由脚本加上 classic。 -->
 <html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
@@ -10,9 +9,7 @@
   </head>
   <body>
     <div id="app">
-      <!-- ① 初始选择页：两个模式选项在上、进入按钮在下，构成一个向下的三角。
-           按钮叫「进入」而不是「开始扫描」——它只是把人送进选中的那个视图，
-           进去之后扫不扫得看情况（已有结果就直接复用，工具模式只切视图不扫）。 -->
+      <!-- ① 初始选择页：两个模式选项在上，进入按钮在下。 -->
       <section id="picker" class="picker">
         <div class="picker-panel">
           <h1 class="picker-title">cefscanw</h1>
@@ -36,9 +33,7 @@
         </div>
       </section>
 
-      <!-- ② 经典模式：整张喜报就是画布，不留工具条。顶部是一块**不滚动**的区域——
-           左上角两个只放图标的胶囊（返回 / 重新扫描），中间那行条数压在喜报的
-           "喜报"两个字正下方；卡片墙排在它下面，只有卡片墙滚。 -->
+      <!-- ② 经典模式：顶部不滚动区域（图标胶囊 + 条数），下面是卡片墙。 -->
       <section id="classic-view" class="classic-view" hidden>
         <header class="classic-top">
           <div class="hud">
@@ -57,7 +52,7 @@
               </svg>
             </button>
           </div>
-          <!-- 条数就是经典模式唯一的结果显示，0 也照实说，没有单独的空态文案。 -->
+          <!-- 条数：经典模式唯一的结果显示。 -->
           <p id="classic-count" class="classic-count">您的电脑里有 0 个 Chromium</p>
         </header>
         <div id="cards" class="cards"></div>
@@ -74,9 +69,7 @@
             placeholder="限定目录（留空扫描全部盘符）"
             spellcheck="false"
           />
-          <!-- 后端不提供选择：自动挑选总是更优（有 Everything 就用，没有就自己遍历）。
-               但"自动"两个字本身没有信息量，所以括号里显示它到底选了谁。做成按钮是
-               为了能手动重测——比如刚把 Everything 启动起来。 -->
+          <!-- 后端 chip：显示自动挑选出的后端名，可点击重新检测。 -->
           <button
             id="backend-display"
             type="button"

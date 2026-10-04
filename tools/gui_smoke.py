@@ -1,49 +1,5 @@
 #!/usr/bin/env python3
-"""cefscanw 的端到端冒烟测试（Windows，仅手动运行，不进 `cargo test`）。
-
-它会真的去点 GUI：找窗口 → 在初始选择页选模式 → 点「开始扫描」→ 定时截屏。
-用来验证「Tauri command + Channel + 前端渲染」这条链路确实通，而不仅仅是能编译。
-
-用法::
-
-    cargo build --release
-    ./target/release/cefscanw.exe &
-    python tools/gui_smoke.py out.png --mode classic 6 20
-    python tools/gui_smoke.py out.png --mode tool --root C:/Users/<you> 6 20
-
-`times` 是截屏时刻（秒），可给多个；脚本不会关掉 cefscanw，自己收尾。
-
-**初始页没有目录输入框**（用户定的：只有两个模式选项 + 一个开始扫描按钮），
-所以第一轮扫描永远是全盘。想限定目录得进工具模式再输一次——`--root` 就是干这个的：
-工具模式下等第一轮扫完，把路径打进工具栏输入框、回车重扫，另存一张 `*_filtered.png`。
-经典模式没有输入框，给了 `--root` 也只会打印一句提醒。
-
-设 `CEFSCAN_SMOKE_EXPAND=1` 可以额外验证「点整行展开路径」，**只对工具模式有效**：
-经典模式里点卡片是在资源管理器里定位，冒烟测试不该真去开一个窗口。
-
-设计要点：**不写死控件坐标**，控件靠像素认、模式靠键盘选：
-
-* 找窗口：`EnumWindows` + 标题前缀。
-* 把窗口提到最前：`SetWindowPos(HWND_TOPMOST)`。**只调 `SetForegroundWindow` 不够**，
-  见 `focus()` 的注释——那是个会让整个测试静默跑偏的坑。
-* 找「开始扫描」按钮：在窗口矩形内找**实心**强调色方块。选择页是深色主题，所以
-  强调色是蓝的 `#4f8ff7`。这里不能只看颜色就取"最右一簇"（那是加选择页之前的做法）：
-  同一个蓝还出现在标题文字（`.picker-title`）和选中那张模式卡的描边上。判据改成
-  「够宽 **且** 填充率够高」——标题文字约 0.35、模式卡描边约 0.03，而按钮是实心的约 0.87。
-  **而且必须按二维连通域找，不能按 x 方向投影聚类**：投影忽略 y，标题 / 描边 / 按钮
-  三者在 x 上互相重叠、间隔都小于 6px，会被并成一个 479x370、填充率 0.09 的簇，
-  按钮跟着连坐判掉。这个坑预览截图验不出来（截图只验"长什么样"，不跑这个函数）。
-* 选模式：**用键盘**。选择页里第一个可聚焦元素就是那组单选钮（一组单选钮里只有被
-  选中的那个是 tab stop），`Tab` 一次必中；`Down` 在组内切到工具模式。比按像素找
-  单选钮稳得多，也更接近真实操作。
-* 工具栏的目录输入框：同样用键盘（`Tab` 两次：返回按钮 → 输入框）。**不按像素找**：
-  它的底色 `--field` 和工具栏面板 `--panel` 只差 11 个色阶，容差收到 2 都分不开。
-  代价是绑定了 tab 顺序——工具栏里在输入框之前新增可聚焦元素时，这个次数要跟着加。
-* 输入文字：`SendInput` + `KEYEVENTF_UNICODE`，绕开键盘布局。
-* 截屏：GDI `BitBlt`，手写 PNG 编码 —— 本机没有 Pillow，`Add-Type` 也被安全策略拦了。
-
-已知脆弱点：颜色/尺寸若大改需要同步更新 `PICKER_ACCENT` 等常量。
-"""
+"""cefscanw 的端到端冒烟测试（Windows，仅手动运行，不进 `cargo test`）。"""
 
 import argparse
 import ctypes
@@ -74,27 +30,18 @@ SWP_NOSIZE = 0x0001
 SWP_NOMOVE = 0x0002
 SWP_SHOWWINDOW = 0x0040
 
-# 初始选择页的强调色（BGRA）。**只有这一套**：选择页是深色的（用户明确要求不铺喜报），
-# 所以它就是 :root 里的 --accent = #4f8ff7。经典模式的中国红 #c31c12 现在只出现在
-# 卡片墙的悬停描边上，页面上没有中国红的实心块，按颜色找按钮找不到它。
+# 初始选择页的强调色（BGRA，即 :root 里的 --accent）。
 PICKER_ACCENT = (247, 143, 79)  # #4f8ff7
 
 TOLERANCE = 14
-# 按钮是 100+ px 宽的实心块；窗口边框、标题文字那几簇要么窄、要么不实心。
+# 按钮最小宽度（px）。
 BUTTON_MIN_WIDTH = 60
-# 还得有高度：选中那张模式卡的**上下描边**是两条独立的 340x1 连通域，填充率 1.00
-# 而且比按钮更宽（实测按钮 222x63、描边 340x1）——只按宽度取最大就会选中一条 1px 的线。
+# 按钮最小高度（px）。
 BUTTON_MIN_HEIGHT = 20
-# 实心判据：强调色像素数 / 外接矩形面积。按钮（内含白色文字）实测约 0.9，
-# 而标题文字的笔画只覆盖约 0.35、模式卡那条 1px 描边约 0.03。
+# 实心判据：强调色像素数 / 外接矩形面积。
 BUTTON_MIN_FILL = 0.5
 
 # KIND_COLORS（见 ui/main.js）里各标签底色，BGRA 顺序，用来定位表格数据行。
-#
-# **刻意不含 unknown `#7f848e`**：它接近中性灰（BGRA 142,132,127），跟界面上
-# 抗锯齿文字的混色像素几乎分不开，收进来会让汇总区那一行也被当成数据行。
-#
-# 这些标签只存在于**工具模式**的表格里；经典模式的卡片墙没有它们。
 TAG_COLORS = [
     (228, 196, 125),  # electron   #7dc4e4
     (230, 169, 90),  # edge       #5aa9e6
@@ -129,14 +76,7 @@ def find_window(prefix):
 
 
 def focus(hwnd):
-    """把窗口提到最前，并且**硬性置顶**。
-
-    只调 `SetForegroundWindow` 是不够的：Windows 允许当前前台进程拒绝把前台权让出去，
-    从终端里跑这个脚本时它经常静默失败，窗口还压在终端后面。而 `capture()` 抓的是
-    **屏幕**，于是抓回来一整张终端内容——症状是"整窗都是同一种深灰"，还会因为终端里的
-    蓝色链接文字匹配上强调色而"找到"一个假按钮，非常难判断。所以这里补一手
-    `SetWindowPos(HWND_TOPMOST)`：它是硬性置顶，不看前台权。收尾记得调 `unpin()`。
-    """
+    """把窗口提到最前，并且硬性置顶。"""
     if user32.IsIconic(hwnd):
         user32.ShowWindow(hwnd, SW_RESTORE)
     user32.SetWindowPos(
@@ -153,7 +93,7 @@ def focus(hwnd):
 
 
 def unpin(hwnd):
-    """取消置顶，别把用户的窗口一直按在最上面。"""
+    """取消置顶。"""
     user32.SetWindowPos(
         wintypes.HWND(hwnd),
         wintypes.HWND(HWND_NOTOPMOST),
@@ -265,20 +205,7 @@ def close_to(pixel, target, tolerance=TOLERANCE):
 
 
 def find_solid_block(pixels, width, region, accent):
-    """找强调色的**实心**方块，返回 ((中心 x, 中心 y), (left, top, right, bottom))。
-
-    判据是「够宽 **且** 够高 **且** 填充率够高」，最后按面积取最大的那个。选择页上的
-    蓝色同时出现在好几处：标题文字（`.picker-title`，每个字母都是独立的小连通域）、
-    选中那张模式卡的 1px 描边、以及"开始扫描"按钮本身。实测：按钮 222x63 填充率 0.92、
-    标题文字填充率约 0.35、模式卡描边是两条 340x1 的线（填充率 1.00）。
-
-    两道闸缺一不可：填充率筛掉文字和"描边围成的框"，**最小高度筛掉 1px 的横线**
-    （它比按钮还宽，只按宽度取最大就会选中它）。
-
-    **必须用二维连通域，不能按 x 方向投影聚类**。投影会忽略 y：标题、模式卡描边、
-    按钮三者在 x 上互相重叠，间隔都小于 6px，于是被并成**同一个簇**——那个簇的
-    外接矩形是 479x370、填充率 0.09，于是按钮被连坐判掉。这个坑很隐蔽：
-    预览截图只验"长什么样"，不跑这个函数，所以一直没暴露出来。
+    """找强调色的实心方块，返回 ((中心 x, 中心 y), (left, top, right, bottom))。
 
     返回 `(None, None)` 表示没找到。
     """
@@ -294,8 +221,7 @@ def find_solid_block(pixels, width, region, accent):
     if not hits:
         return None, None
 
-    # 8 邻接的连通域（flood fill）。同一块实心按钮是一整片，而 1px 描边虽然也连通，
-    # 但外接矩形大、填充率低，会被下面那道填充率闸筛掉。
+    # 8 邻接的连通域（flood fill）。
     best = None
     seen = set()
     for seed in hits:
@@ -340,14 +266,10 @@ def find_solid_block(pixels, width, region, accent):
 
 
 def find_first_row(pixels, width, region, min_hits=40):
-    """找表格第一条数据行。用「类型」列的标签底色定位——它在表格里独一无二。
+    """找表格第一条数据行，用「类型」列的标签底色定位。
 
-    要求一行里至少有 `min_hits` 个匹配像素，这样才不会被应用图标里偶合的
-    颜色骗到（图标只有 18px，一个标签的底色有几十像素宽）。
     从工具条下方（+90px）开始扫，避开工具条和汇总区的文字。
     返回标签中心 (x, y)；找不到返回 None。
-
-    **只对工具模式有意义**：这些标签在经典模式的卡片墙里根本不存在。
     """
     left, top, right, bottom = region
     for y in range(top + 90, bottom):
@@ -414,7 +336,7 @@ def click(x, y):
 
 
 def type_text(text):
-    """逐字符注入 Unicode，不依赖键盘布局。"""
+    """逐字符注入 Unicode。"""
     for character in text:
         for flags in (KEYEVENTF_UNICODE, KEYEVENTF_UNICODE | KEYEVENTF_KEYUP):
             item = Input()
@@ -451,8 +373,7 @@ def press_combo(modifier, key):
 
 
 def select_all():
-    """Ctrl+A。脚本可能被反复运行，输入框里还留着上一轮的路径，必须先清掉，
-    否则新路径会被追加到旧路径后面。"""
+    """Ctrl+A。"""
     press_combo(VK_CONTROL, VK_A)
 
 
@@ -460,13 +381,7 @@ def select_all():
 
 
 def locate_start_button(hwnd, region, attempts=3):
-    """抓帧并找「开始扫描」按钮，失败就重新聚焦再抓一次。
-
-    为什么要重试：刚把窗口置顶之后，DWM 有一小段时间还没合成完，`BitBlt` 抓回来的是
-    一帧**不完整**的画面——实测遇到过"面板和文字都在、唯独按钮那一块是空的"，
-    于是报找不到。这种帧是偶发的（同一个状态紧接着再跑一次就正常），所以值得重试，
-    而不是直接判失败。
-    """
+    """抓帧并找「开始扫描」按钮，失败就重新聚焦再抓一次。"""
     for attempt in range(1, attempts + 1):
         width, _height, pixels = capture()
         button, box = find_solid_block(pixels, width, region, PICKER_ACCENT)
@@ -480,16 +395,7 @@ def locate_start_button(hwnd, region, attempts=3):
 
 
 def choose_mode(mode):
-    """在初始选择页把模式选好（键盘操作，理由见文件头）。
-
-    选择页的 DOM 顺序是 [经典单选钮, 工具单选钮, 开始扫描]，而一组单选钮里只有被
-    选中的那个是 tab stop，所以：
-    * 经典（默认选中）：什么都不用做；
-    * 工具：`Tab` 进组 → `Down` 在组内切到工具。
-
-    用键盘而不是按像素找单选钮：那个圆点只有十几像素，配色还跟背景接近，按像素找
-    基本靠运气。
-    """
+    """在初始选择页把模式选好（键盘操作）。"""
     press_key(VK_TAB)
     if mode == "tool":
         press_key(VK_DOWN)
@@ -497,13 +403,7 @@ def choose_mode(mode):
 
 
 def type_root_and_rescan(root):
-    """工具模式专用：把路径打进工具栏输入框并回车重扫。
-
-    焦点用键盘送进去：从"什么都没聚焦"出发，工具视图里的 tab 顺序是
-    [返回按钮, 目录输入框, 后端 chip, 开始扫描]，所以两次 `Tab` 落在输入框上。
-
-    回车能直接触发扫描：`#root-input` 上有 Enter 的 keydown 监听（见 main.js）。
-    """
+    """工具模式专用：把路径打进工具栏输入框并回车重扫。"""
     press_key(VK_TAB)  # 返回按钮
     press_key(VK_TAB)  # 目录输入框
     select_all()
@@ -565,8 +465,7 @@ def main(argv=None):
     click(button_x, button_y)
     print("已点击开始扫描")
 
-    # ③ 定时截屏。经典模式的验证就靠这几张图（卡片墙没有单元测试看得见的东西，
-    #    布局和喜报叠色的正确性只有截图能说话）。
+    # ③ 定时截屏。
     elapsed = 0
     for wait in waits:
         time.sleep(max(wait - elapsed, 0))

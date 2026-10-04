@@ -1,16 +1,4 @@
 //! 自写的文件系统并行遍历。
-//!
-//! 不依赖 `ignore` 的理由：cefscan 只需要"枚举出极少数候选文件"，
-//! 不需要 gitignore 规则，也不需要为每条路径做一次 stat。
-//! 去掉这两项之后，自己写一套比通用库更轻也更快：
-//!
-//! - 调度：共享目录队列 + `pending` 计数（队列里的 + 正在处理的目录数），
-//!   配合 `Condvar` 唤醒空闲 worker；`pending` 归零即全体退出。
-//!   先加后减，避免出现"瞬时归零"导致提前结束。
-//! - 剪枝：`Filter::allows_dir` 在进入目录前生效，整棵子树直接不产生系统调用。
-//! - 分配：只有目录会构造 `PathBuf`；普通文件只构造文件名 `OsString`，
-//!   匹配不上就不构造路径。
-//! - 结果：每个 worker 攒在本地 `Vec` 里，结束时一次性合并，避免全程抢锁。
 
 use std::collections::VecDeque;
 use std::ffi::OsString;
@@ -25,9 +13,6 @@ use crate::filter::Filter;
 use crate::model::{Candidate, ScanOptions};
 
 /// 默认遍历线程数上限。
-///
-/// 实测：热缓存下 8 线程就到顶，12 线程以上反而变慢；冷缓存能吃到 16 线程的红利，
-/// 但 8 是最稳的默认值。
 pub const DEFAULT_MAX_THREADS: usize = 8;
 
 #[derive(Debug, Default)]
@@ -162,7 +147,7 @@ fn scan_dir(dir: &Path, filter: &Filter, local: &mut Vec<Candidate>) -> Vec<Path
     };
 
     for entry in entries.flatten() {
-        // `file_type()` 不跟随符号链接，且在这两个平台上都不需要额外 syscall。
+        // `file_type()` 不跟随符号链接。
         let Ok(file_type) = entry.file_type() else {
             continue;
         };
@@ -222,7 +207,7 @@ fn resolve_roots(options: &ScanOptions) -> Result<Vec<PathBuf>, ScanError> {
     default_roots()
 }
 
-/// 统一分隔符，避免输出里出现 `C:/Users\app` 这种混写。
+/// 统一分隔符。
 #[cfg(target_os = "windows")]
 fn normalize_root(root: &Path) -> PathBuf {
     let text = root.to_string_lossy().replace('/', "\\");
@@ -382,9 +367,6 @@ mod tests {
     #[test]
     fn empty_roots_fall_back_to_platform_defaults() {
         // 不指定 root 时走平台默认起点：Windows 是各个盘符，Unix 是 `/`。
-        //
-        // 这里只验证**推导出来的起点**，不能真的去 `walk`——那会遍历真实全盘，
-        // 在 Linux CI 上实测要 115 秒，而且违反「测试不得访问真实全盘」的约定。
         let roots = resolve_roots(&ScanOptions::default()).unwrap();
         assert!(!roots.is_empty());
         assert!(roots.iter().all(|root| root.is_absolute()), "{roots:?}");

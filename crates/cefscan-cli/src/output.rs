@@ -100,7 +100,7 @@ fn render_table(apps: &[AppInfo]) -> String {
     out
 }
 
-/// 1000 进制还是 1024 进制：这里用 1024 进制，与 Windows 资源管理器一致。
+/// 把字节数格式化成 1024 进制的人类可读大小。
 pub fn human_size(bytes: u64) -> String {
     const UNITS: [&str; 5] = ["B", "KiB", "MiB", "GiB", "TiB"];
     let mut value = bytes as f64;

@@ -1,17 +1,4 @@
 //! 从路径推导一个给人看的应用名。
-//!
-//! 扫描结果里的 `path` 是"最能代表这个应用的那个文件或目录"，直接拿来当名字
-//! 通常没法看：`...\Microsoft VS Code\Code.exe` 会显示成 "Code"，
-//! `...\Edge\Application\154.0.4258.37\msedge.exe` 会显示成 "msedge"。
-//!
-//! 所以这里从路径所在目录往上走，跳过三类"不是应用名"的目录，取第一个有意义的名字：
-//!
-//! - 版本号目录（`154.0.4258.37`、`app-3.6.6`、`Workstation-17.0.0`）；
-//! - 通用目录名（`Application`、`Bin64`、`runtime`、`64bit`）；
-//! - 通用后缀目录（`BH3_Data`、`App_Data`、`Cache_Data` 这类 `<前缀>_Data`）。
-//!
-//! 走到用户目录/系统目录这类"边界"就停下，退回文件名本身。纯字符串逻辑，
-//! 不碰文件系统，所以好测。
 
 use std::ffi::OsStr;
 use std::path::Path;
@@ -62,14 +49,10 @@ const GENERIC_SEGMENTS: &[&str] = &[
     "x86",
 ];
 
-/// 通用后缀：整段不是应用名，但前缀那截才是，所以要整段跳过。
-///
-/// 主要收 `_Data` 家族：Unity 的 `<产品名>_Data`（`BH3_Data`）、ASP.NET 的
-/// `App_Data`，以及 `Cache_Data` / `crash_data` / `module_data` 这类缓存目录 ——
-/// 本机就能捞出十几种写法，穷举不划算，按后缀匹配更稳。忽略大小写。
+/// 通用后缀：整段不是应用名，但前缀那截才是，所以要整段跳过。忽略大小写。
 const GENERIC_SUFFIXES: &[&str] = &["_data"];
 
-/// 走到这些名字就停：再往上就是用户目录或系统目录，取到的名字没有意义。
+/// 走到这些名字就停。
 const STOP_SEGMENTS: &[&str] = &[
     "appdata",
     "application data",
@@ -102,7 +85,7 @@ pub fn display_name(path: &Path) -> String {
                 continue;
             }
             if is_stop_segment(name) {
-                break; // 再往上没有意义了，直接退回文件名
+                break; // 直接退回文件名
             }
             if is_generic(name) || is_version_like(name) {
                 continue;
@@ -117,8 +100,7 @@ pub fn display_name(path: &Path) -> String {
         return strip_package_suffix(stem).to_owned();
     }
 
-    // 走到这里说明路径本身就没有可用成分（空路径之类）。名字列留空会显得像坏了，
-    // 所以给一个占位。
+    // 路径本身没有可用成分（空路径之类）时给一个占位。
     let rendered = path.display().to_string();
     if rendered.is_empty() {
         "(未知)".to_owned()
@@ -160,9 +142,7 @@ fn is_stop_segment(name: &str) -> bool {
 
 /// 形如 `154.0.4258.37`、`app-3.6.6`、`office6`、`11581` 的版本号目录。
 ///
-/// 判据：把开头的字母和分隔符剥掉之后，剩下的是"纯数字 + 点/横线/下划线"，
-/// 且至少含一个数字。这样 `BeamNG.drive`（剥完是空）和 `360se6`（含字母）
-/// 都不会被误判成版本号。
+/// 判据：把开头的字母和分隔符剥掉之后，剩下的是"纯数字 + 点/横线/下划线"，且至少含一个数字。
 fn is_version_like(name: &str) -> bool {
     let rest = name
         .trim_start_matches(|c: char| c.is_ascii_alphabetic() || c == '-' || c == '_' || c == '.');
@@ -179,10 +159,7 @@ fn is_version_like(name: &str) -> bool {
 mod tests {
     use super::*;
 
-    /// Windows 侧的真实样本，全部取自本机扫描结果。改启发式时先看这张表。
-    ///
-    /// **只在 Windows 上跑**：这些字面量用 `\` 分隔，而 Unix 上 `\` 是合法的文件名字符、
-    /// 不是分隔符，整条串会被 `Path` 当成一个文件名，断言必然错。
+    /// Windows 路径推导出可读名字。
     #[cfg(target_os = "windows")]
     #[test]
     fn windows_paths_get_readable_names() {
@@ -231,7 +208,7 @@ mod tests {
                 r"C:\Program Files\WindowsApps\Crystalnix.Termius_10.1.0.0_x64__0m0t0j9spf6x8\app\Termius.exe",
                 "Crystalnix.Termius",
             ),
-            // Unity 的 `<产品名>_Data` 是数据目录，要连着上面的 `Plugins` 一起跳过。
+            // `_Data` 数据目录要跳过。
             (
                 r"D:\Program Files\miHoYo\Honkai Impact 3rd Game\BH3_Data\Plugins\APM4webCrashR.exe",
                 "Honkai Impact 3rd Game",
@@ -248,7 +225,7 @@ mod tests {
         }
     }
 
-    /// Unix 侧样本，用 `/` 分隔。挑的都是"扫一眼就知道该显示什么"的常见布局。
+    /// Unix 路径推导出可读名字。
     #[cfg(not(target_os = "windows"))]
     #[test]
     fn unix_paths_get_readable_names() {
@@ -272,8 +249,7 @@ mod tests {
 
     #[test]
     fn stops_at_user_and_system_directories() {
-        // 直接躺在 Programs 下面的 exe 没有更有意义的目录名可用，
-        // 应该退回文件名而不是显示 "Local" 或 "Programs"。
+        // Programs 下的 exe 退回文件名，而不是显示 "Local" / "Programs"。
         #[cfg(target_os = "windows")]
         {
             assert_eq!(
@@ -307,7 +283,7 @@ mod tests {
         for path in ["/", "", "x"] {
             assert!(!display_name(Path::new(path)).is_empty(), "路径 {path:?}");
         }
-        // 盘符根没有 file_name，是最容易漏的一条。
+        // 盘符根没有 file_name。
         #[cfg(target_os = "windows")]
         assert!(!display_name(Path::new(r"C:\")).is_empty());
     }
@@ -351,7 +327,7 @@ mod tests {
         assert!(!is_generic("VMware VIX"));
         assert!(!is_generic("BeamNG.drive"));
         assert!(!is_generic("Code"));
-        // 裸 `Data` 不带下划线，不算 `_Data` 后缀（见模块内注释的取舍）。
+        // 裸 `Data` 不带下划线，不算 `_Data` 后缀。
         assert!(!is_generic("Data"));
     }
 

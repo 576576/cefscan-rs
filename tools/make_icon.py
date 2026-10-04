@@ -1,24 +1,5 @@
 #!/usr/bin/env python3
-"""生成 cefscanw 的图标（纯标准库，不依赖 Pillow）。
-
-图标语义：一块深色圆角底 + 蓝色放大镜，表示"扫描/查找"。
-
-用法::
-
-    python tools/make_icon.py crates/cefscan-desktop/src-tauri/icons
-
-输出两个文件，都不可省略：
-
-- ``icon.ico``（多尺寸 32bpp BMP 条目）——tauri-build 生成 Windows 资源文件时要用。
-- ``icon.png``（256×256 RGBA）——tauri-codegen 在 **Unix 目标**上取默认窗口图标时
-  要用。它在 ``bundle.icon`` 里找第一个 ``.png``，找不到就退回硬编码的
-  ``icons/icon.png``；再找不到就在 ``generate_context!`` 里 panic
-  （"failed to open icon ... No such file or directory"）。
-  注意这张图**必须是 RGBA**：``CachedIcon::new_png`` 会检查
-  ``png::ColorType::Rgba``，调色板或 RGB 都会 panic。
-
-脚本可重复执行，结果确定。
-"""
+"""生成 cefscanw 的图标（纯标准库，不依赖 Pillow）。"""
 
 from __future__ import annotations
 
@@ -28,13 +9,13 @@ import sys
 import zlib
 from pathlib import Path
 
-# ICO 的输出尺寸（像素）。16/32 给任务栏与列表，48/64 给桌面，128/256 给大图标视图。
+# ICO 的输出尺寸（像素）。
 SIZES = (16, 32, 48, 64, 128, 256)
 
-# PNG 的尺寸：只出一张给 Linux 当窗口图标，256 够用。
+# PNG 的尺寸（像素）。
 PNG_SIZE = 256
 
-# 超采样倍数：先在高分辨率画再盒式降采样，得到抗锯齿边缘。
+# 超采样倍数（抗锯齿）。
 SUPERSAMPLE = 4
 
 BACKGROUND_TOP = (35, 40, 56)  # #232838
@@ -57,7 +38,7 @@ def _rounded_rect_contains(x: float, y: float, size: float, radius: float) -> bo
 def _segment_distance_sq(
     x: float, y: float, ax: float, ay: float, bx: float, by: float
 ) -> float:
-    """点到线段的距离平方（无 sqrt，避免热点里的开方）。"""
+    """点到线段的距离平方。"""
     vx = bx - ax
     vy = by - ay
     length_sq = vx * vx + vy * vy
@@ -93,7 +74,7 @@ def render_rgba(size: int) -> bytes:
     glass_sq = glass_radius * glass_radius
     handle_half_sq = handle_half * handle_half
 
-    # 背景竖直渐变，逐行预计算，避免内层重复插值。
+    # 背景竖直渐变，逐行预计算。
     background = []
     for row in range(n):
         t = row / (n - 1) if n > 1 else 0.0
@@ -176,8 +157,7 @@ def _bmp_payload(size: int, rgba: bytes) -> bytes:
                 (rgba[index + 2], rgba[index + 1], rgba[index], rgba[index + 3])
             )
 
-    # AND 掩码：1bpp，每行补齐到 4 字节边界。32bpp 下 Windows 优先用 alpha，
-    # 这里仍然老实写全，兼容老式读取方。
+    # AND 掩码：1bpp，每行补齐到 4 字节边界。
     mask_stride = ((size + 31) // 32) * 4
     mask = bytearray(mask_stride * size)
     for row in range(size):
@@ -190,7 +170,7 @@ def _bmp_payload(size: int, rgba: bytes) -> bytes:
 
 
 def _render_cached(size: int, cache: dict[int, bytes]) -> bytes:
-    """渲染并按尺寸缓存：256 那张很贵，ICO 和 PNG 都要用，别算两遍。"""
+    """渲染并按尺寸缓存。"""
     if size not in cache:
         cache[size] = render_rgba(size)
     return cache[size]
@@ -240,10 +220,7 @@ def _png_chunk(tag: bytes, data: bytes) -> bytes:
 
 
 def build_png(destination: Path, size: int, cache: dict[int, bytes]) -> None:
-    """写一张 8 位 RGBA（色彩类型 6）的 PNG。
-
-    色彩类型必须是 6：tauri-codegen 会拒绝非 RGBA 的图标。
-    """
+    """写一张 8 位 RGBA（色彩类型 6）的 PNG。"""
     rgba = _render_cached(size, cache)
     stride = size * 4
 

@@ -15,9 +15,6 @@ pub struct DirInspection {
 }
 
 /// 检查单个目录。
-///
-/// 这是候选目录数量级（几十到几百个）上的操作，但每个目录里可能躺着上百 MB
-/// 的可执行文件，所以调用方应当并行化。
 pub fn inspect_directory(dir: &Path, flavor: Flavor, scanner: &SignatureScanner) -> DirInspection {
     let Ok(entries) = fs::read_dir(dir) else {
         return DirInspection::default();
@@ -41,7 +38,7 @@ pub fn inspect_directory(dir: &Path, flavor: Flavor, scanner: &SignatureScanner)
         let path = entry.path();
         let name = entry.file_name().to_string_lossy().to_ascii_lowercase();
 
-        // Edge / Chrome 靠文件名就能定死，不必读文件内容。
+        // Edge / Chrome 靠文件名判定。
         if matches!(flavor, Flavor::Standard) {
             let special = match name.as_str() {
                 "msedge" | "msedge.exe" | "msedge_proxy.exe" => Some(AppKind::Edge),
@@ -70,7 +67,6 @@ pub fn inspect_directory(dir: &Path, flavor: Flavor, scanner: &SignatureScanner)
         if !is_executable && !is_shared && !is_windows_executable {
             continue;
         }
-        // `napi_create_buffer` 在普通 libnode 里也有，只有出现在可执行程序里才说明是 MiniElectron。
         if matches!(flavor, Flavor::Mini) && is_shared {
             continue;
         }
@@ -124,7 +120,7 @@ pub(crate) fn is_shared_library(name: &str) -> bool {
         || name.contains(".so.")
 }
 
-/// 只对与内核相关的动态库做内容扫描，避免把上百个无关 DLL 全读一遍。
+/// 只对与内核相关的动态库做内容扫描。
 pub(crate) fn is_relevant_shared_library(name: &str) -> bool {
     name.contains("cef") || name == "nw.dll" || name.starts_with("libnw.")
 }

@@ -4,9 +4,6 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 /// 应用所属的 Chromium 内核类型。
-///
-/// 用 enum 而非字符串：`rank` 决定同一目录命中多条签名时谁胜出，
-/// `label` 是稳定的对外展示/序列化名。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[non_exhaustive]
 #[cfg_attr(feature = "serde", derive(serde::Serialize))]
@@ -24,7 +21,7 @@ pub enum AppKind {
 }
 
 impl AppKind {
-    /// 优先级。数值越大越强，参考实现中经过实践验证的排序。
+    /// 优先级，数值越大越强。
     pub const fn rank(self) -> u8 {
         match self {
             Self::Electron => 100,
@@ -160,13 +157,6 @@ impl Default for ScanOptions {
 }
 
 /// 遍历后端的展示名。
-///
-/// 不叫 "filesystem"：用户视角里"后端"就是"谁去找的"，而遍历是 cefscan 自己干的活，
-/// 所以直接叫 cefscan。索引后端则报**实际探测到的服务名**（如 Everything），
-/// 而不是笼统的 "index"——"自动"这个选项要可信，就得让人看见它到底选了谁。
-///
-/// 这是 [`ScanStats::backend`]、[`ScanNotice::backend`] 和 `scan::detect_backend()`
-/// 的唯一取值来源，改名只需动这一处。
 pub const FILESYSTEM_BACKEND: &str = "cefscan";
 
 /// 一次扫描的汇总信息。
@@ -190,13 +180,6 @@ pub struct ScanStats {
 }
 
 /// 扫描过程中的阶段性通知。
-///
-/// 和 [`AppInfo`] / [`ScanStats`] 的区别：那些是**结果**，这个是**进度**。
-/// 目前只有一个字段，存在的唯一理由是：后端名在挑选后端的那一刻就确定了，
-/// 比第一批结果早得多（索引后端毫秒级，遍历后端要先把候选找完才可能出第一条结果），
-/// 而用户希望在点下"扫描"之后立刻看到实际用的是哪个后端，而不是等扫描结束。
-///
-/// 想让"自动"这个选项对用户可信，就必须能实时看到它到底选了谁。
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub struct ScanNotice {

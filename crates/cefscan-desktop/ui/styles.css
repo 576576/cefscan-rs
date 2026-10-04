@@ -1,10 +1,9 @@
-/* 所有颜色都走变量，经典模式只换一套变量值就完成换肤。
-   规矩：这里不许出现写死的颜色（--card-* 是尺寸不是颜色），否则经典模式会漏出深色。 */
+/* 所有颜色都走变量，经典模式只换一套变量值就完成换肤。 */
 :root {
   --bg: #1b1d23;
   --bg-image: none;
   --panel: #22252c;
-  /* 需要压住底下图案时用这个。深色主题下 --panel 本来就不透明，两者一样。 */
+  /* 需要压住底下图案时用这个。 */
   --panel-solid: #22252c;
   --summary: #1f222a;
   --sheet: transparent;
@@ -21,28 +20,20 @@
   --row-hover: #23262e;
   --row-line: #262a32;
 
-  /* 卡片墙的尺寸。卡片定高是"按整行滚动"的前提：每行一样高，
-     JS 才能把滚动位置对齐到行边界（见 main.js 的 rowPitch / followNewest）。
-     这三个值是**一组**：密度 = 一屏能放几张，跟 (card-min+gap) × (card-h+gap) 成反比。
-     想让密度变成 k 倍，就把三者一起乘 1/√k（横向和纵向各乘一次，合起来正好 k 倍）。
-     现在是 168/116/14 的 1/√1.5 ≈ 0.8165 倍，即密度 ×1.5。改的时候别只改一个。 */
+  /* 卡片墙的尺寸，三者共同决定一屏能放几张卡片。 */
   --card-min: 137px;
   --card-h: 95px;
   --card-gap: 11px;
-  /* 卡片是全透明的——喜报直接透上来，卡片只靠描边和内容成组。
-     两个主题都用它，所以不需要在 html.classic 里覆盖。 */
+  /* 卡片背景，全透明。 */
   --card-bg: transparent;
 }
 
-/* 经典模式：喜报背景 + 米黄纸面 + 中国红。深色主题的对比度在喜报上完全不够，
-   所以不是加一层遮罩，而是整套换成亮色系——文字是深褐，落在米黄面板上。
-   透明度刻意留在 0.72~0.84：再厚一点喜报就糊成一片背景噪声，白瞎了这张图。 */
+/* 经典模式配色：喜报背景 + 米黄纸面 + 中国红。 */
 html.classic {
   --bg: #7d1a10;
   --bg-image: url("assets/images/background.webp");
   --panel: rgba(255, 250, 242, 0.8);
-  /* 喜报正中最亮的那块是纯黄，0.8 的米黄压不住它，文字会发飘。浮在图案上的
-     元素（选择页面板、HUD 小药丸）改用这个更实的底色。 */
+  /* 浮在图案上的元素（选择页面板、HUD 小药丸）用的更实底色。 */
   --panel-solid: rgba(255, 250, 242, 0.93);
   --summary: rgba(255, 250, 242, 0.84);
   --sheet: rgba(255, 252, 246, 0.78);
@@ -62,17 +53,13 @@ html.classic {
 
 * { box-sizing: border-box; }
 
-/* `.summary { display: flex }` 的优先级和 `[hidden]` 一样，但作者样式永远压过
-   浏览器默认样式，所以只写 `hidden` 属性是藏不住的——汇总栏会在开扫之前就
-   顶着"应用 0 / 总占用 0 B"露出来。 */
+/* 作者样式永远压过浏览器默认样式，藏住 `hidden` 元素需要 `!important`。 */
 [hidden] { display: none !important; }
 
 html, body {
   margin: 0;
   height: 100%;
-  /* 用 background-image 而不是简写：--bg-image 在深色主题下是 none，
-     而 --bg 始终是个兜底底色（喜报没加载出来时也不会变成深灰配米黄字）。
-     center top：喜报的"喜报"两个字在顶部正中，cover 裁掉底部比裁掉顶部好。 */
+  /* 背景色作兜底，背景图用 center top + cover 铺满。 */
   background-color: var(--bg);
   background-image: var(--bg-image);
   background-position: center top;
@@ -84,16 +71,14 @@ html, body {
 
 #app { display: flex; flex-direction: column; height: 100%; }
 
-/* 三个视图都靠 flex 撑满 #app。子项必须显式 min-height: 0，
-   否则内部的可滚动区域会把容器撑破、滚动条长到外层去。 */
+/* 三个视图都靠 flex 撑满 #app，子项显式 min-height: 0。 */
 .picker, .classic-view, .tool-view { flex: 1; min-height: 0; }
 
 /* ---------- ① 初始选择页 ---------- */
 
 .picker { display: flex; padding: 24px; overflow: auto; }
 
-/* 用 margin: auto 而不是给父级 align-items: center：窗口太矮时
-   align-items: center 会把面板顶部顶出可视区且滚不到，margin: auto 不会。 */
+/* 用 margin: auto 让面板在容器内居中。 */
 .picker-panel {
   margin: auto;
   width: min(560px, 100%);
@@ -112,7 +97,7 @@ html, body {
 .picker-title { margin: 0; font-size: 26px; letter-spacing: 1px; color: var(--accent); }
 .picker-sub { margin: 0; color: var(--muted); }
 
-/* 两个选项并排一行、按钮独占下面一行居中——正好是个向下的三角形。 */
+/* 两个选项并排一行。 */
 .modes { display: flex; gap: var(--card-gap); width: 100%; }
 
 .mode {
@@ -152,16 +137,14 @@ html, body {
 .picker-status { margin: 0; color: var(--muted); }
 .picker-status:empty { display: none; }
 
-/* ---------- ② 经典模式：整张喜报就是画布 ---------- */
+/* ---------- ② 经典模式 ---------- */
 
 .classic-view { position: relative; display: flex; flex-direction: column; }
 
-/* 顶部区域：**不滚动**——只有下面的卡片墙滚。这样"卡片墙排在条数下方"是恒定的，
-   不会滚着滚着把条数顶走。 */
+/* 顶部区域：不滚动，只有下面的卡片墙滚。 */
 .classic-top { flex: none; position: relative; }
 
-/* 左上角两个图标胶囊（返回 / 重新扫描）。用户明确要求经典模式不留工具条，
-   而且这两个胶囊**只放图标不放文字**，所以是等宽等高的圆钮。 */
+/* 左上角两个图标胶囊（返回 / 重新扫描）。 */
 .hud {
   position: absolute;
   top: 14px;
@@ -188,12 +171,7 @@ html, body {
 .icon-pill:hover { background: var(--control-hover); color: var(--text-strong); }
 .icon-pill:disabled { opacity: 0.5; cursor: default; }
 
-/* 条数压在喜报的"喜报"两个字正下方。
-   这里用**百分比**而不是固定 px：背景是 `center top` + `cover`，缩放由窗口宽度决定，
-   所以"喜报"下沿在窗口里的高度与宽度成正比（图里下沿约 y=145/749，而渲染高度
-   = 0.749 × 宽度 → 约 14.5% × 宽度）。用百分比才能跟着窗口一起走；
-   写死 px 的话窗口一拉宽，"喜报"就跑到字下面来了。
-   窗口高宽比极端到让 cover 改按高度缩放时这条会偏——很少见，先不处理。 */
+/* 条数位置：用百分比 padding，随窗口宽度缩放。 */
 .classic-count {
   margin: 0;
   padding: 15% 24px 12px;
@@ -203,7 +181,7 @@ html, body {
   color: var(--text-strong);
 }
 
-/* 工具模式的返回按钮。经典模式那两个已经换成图标胶囊，不再用这个。 */
+/* 工具模式的返回按钮。 */
 .back {
   padding: 5px 12px;
   border: 1px solid var(--border);
@@ -217,10 +195,7 @@ html, body {
 
 .back:hover { background: var(--control-hover); color: var(--text-strong); }
 
-/* 卡片墙：卡片直接浮在喜报上，没有面板包着，卡片自己也是全透明的。
-   auto-fill + 1fr 让每行个数随窗宽自适应；min(…, 100%) 保证窄窗口下不横向溢出。
-   grid-auto-rows 定高 → 每行等高，"按整行滚动"才有确定的行距可对齐。
-   两侧留出 5% 的空档：卡片墙**不铺满页面**（它上面是条数、左右是留白）。 */
+/* 卡片墙：auto-fill + 1fr 自适应列数，grid-auto-rows 定高，两侧留 5% 空档。 */
 .cards {
   flex: 1;
   min-height: 0;
@@ -232,7 +207,7 @@ html, body {
   gap: var(--card-gap);
   align-content: start;
   padding: 0 5% 18px;
-  /* 隐藏滚动条：只靠滚轮 / 触控板滚，视觉上不留一道槽。 */
+  /* 隐藏滚动条。 */
   scrollbar-width: none;
 }
 
@@ -243,10 +218,7 @@ html, body {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  /* 内边距和行间距刻意收得很紧：卡片定高 95px，内容必须装得下，
-     否则 `overflow: hidden` 会把应用名的下半截（尤其 g/p/y 这类下伸笔画）切掉。
-     算一笔账：95 - 8×2 = 79 可用，内容 32(图标) + 4 + 18(名称) + 4 + 15(占用) = 73。
-     这套尺寸跟 --card-h 是绑死的，单独调大字号就会重新切字。 */
+  /* 内边距和行间距收紧，保证内容装得下卡片定高。 */
   gap: 4px;
   padding: 8px 10px;
   border: 1px solid var(--border);
@@ -257,8 +229,7 @@ html, body {
   transition: background 120ms ease, border-color 120ms ease, box-shadow 120ms ease;
 }
 
-/* 悬停只改颜色不改 transform：入场动画用了 animation-fill-mode: both，
-   结束态会一直压着 transform，hover 再设 transform 是无效的。 */
+/* 悬停只改颜色，不改 transform。 */
 .card:hover {
   border-color: var(--accent);
   background: var(--control-hover);
@@ -278,8 +249,7 @@ html, body {
 .card-icon .placeholder { width: 32px; height: 32px; border: 1px solid var(--border); border-radius: 6px; background: var(--control); }
 .card-icon .dot { position: absolute; right: -3px; bottom: -3px; margin: 0; box-shadow: 0 0 0 2px var(--panel); }
 
-/* 字号和行高都写死，别让它继承 body 的 14px / 1.5（= 21px，加上图标和占用就装不下
-   95px 了，装不下就会被 `overflow: hidden` 切掉下伸笔画）。 */
+/* 字号和行高写死，不继承 body。 */
 .card-name {
   max-width: 100%;
   font-size: 13px;
@@ -300,7 +270,7 @@ html, body {
 
 .cards-more { grid-column: 1 / -1; margin: 0; padding: 16px; text-align: center; color: var(--muted); }
 
-/* 卡片版"缓缓出现"：只有刚揭示出来的卡片才有 .enter。 */
+/* 卡片入场动画：只有刚揭示出来的卡片才有 .enter。 */
 @keyframes card-enter {
   from { opacity: 0; transform: translateY(10px) scale(0.96); }
   to { opacity: 1; transform: none; }
@@ -339,9 +309,7 @@ html, body {
 
 #root-input:focus { outline: 1px solid var(--accent); }
 
-/* 后端 chip：长得像只读标签，但其实是按钮——点一下重新检测。
-   不做成下拉：界面上没有第二个后端可选（自动挑选总是更优），
-   这个按钮存在的意义是"重新探一次"，比如刚把 Everything 启动起来。 */
+/* 后端 chip：外观像只读标签，实际是可点击的按钮，点击重新检测。 */
 #backend-display {
   padding: 6px 10px;
   border: 1px solid var(--border);
@@ -383,8 +351,7 @@ html, body {
 
 table { width: 100%; border-collapse: collapse; table-layout: fixed; }
 
-/* 固定列宽：路径列不设宽度，吃掉剩余空间。这样折叠后的「头…尾」不会被
-   CSS 的 text-overflow 二次截断，尾部一定看得见。 */
+/* 固定列宽：路径列不设宽度，吃掉剩余空间。 */
 .col-icon { width: 34px; }
 .col-name { width: 22%; }
 .col-kind { width: 108px; }
@@ -411,7 +378,7 @@ tbody tr:hover { background: var(--row-hover); cursor: pointer; }
 
 .num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
 
-/* 图标列：不给它排序，只占一个固定窄列（宽度由 colgroup 定）。 */
+/* 图标列：固定窄列，宽度由 colgroup 定。 */
 td.icon { padding-right: 0; }
 
 td.icon img { display: block; width: 18px; height: 18px; }

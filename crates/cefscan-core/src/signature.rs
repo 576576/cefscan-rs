@@ -1,7 +1,4 @@
 //! 二进制签名扫描。
-//!
-//! 只做一件事：在可执行文件/动态库里找一段特征字符串，据此判断它属于哪种
-//! Chromium 内核。签名表与优先级来自参考实现的实践结论。
 
 use std::fs;
 use std::io::{self, Read, Seek};
@@ -11,7 +8,7 @@ use crate::model::AppKind;
 
 /// 单次读取的块大小。
 pub const CHUNK_SIZE: usize = 1024 * 1024;
-/// 块之间的重叠字节数，防止签名正好跨块被截断。
+/// 块之间的重叠字节数。
 pub const OVERLAP: usize = 64;
 
 /// 扫描风味。Mini 分支用于从 `libnode` 线索里区分 MiniElectron / MiniBlink。
@@ -29,9 +26,6 @@ struct Rule {
 }
 
 /// 预构建 `memmem::Finder` 的扫描器。
-///
-/// `Finder` 内部有预处理状态，逐次调用 `memchr::memmem::find` 会反复重建，
-/// 预构建后在百万级字节流上差距明显。
 #[derive(Clone)]
 pub struct SignatureScanner {
     standard: Vec<Rule>,
@@ -61,7 +55,7 @@ impl SignatureScanner {
         }
     }
 
-    /// 扫描任意 `Read`。测试里喂 `Cursor<Vec<u8>>` 即可，无需落盘。
+    /// 扫描任意 `Read`。
     pub fn scan_read<R: Read>(
         &self,
         reader: &mut R,
@@ -102,7 +96,7 @@ impl SignatureScanner {
         Ok(best)
     }
 
-    /// 扫描一个文件。不是 ELF / PE / Mach-O 就直接跳过，省掉整文件读取。
+    /// 扫描一个文件。不是 ELF / PE / Mach-O 就直接跳过。
     pub fn scan_file(
         &self,
         path: &Path,

@@ -1,39 +1,4 @@
-"""生成一份带假数据的 cefscanw 前端预览页（只用于本地看效果，不入库）。
-
-用法：
-    python tools/preview_ui.py <输出目录> [picker|classic|tool] [条数]
-然后拿浏览器打开 <输出目录>/index.html 截图即可。
-
-`picker` 只画初始选择页（不做任何自动点击），另外两个会选好模式并点下"开始扫描"。
-
-条数超过 DEMO 的长度时会把 DEMO 循环补足（名字加序号），用来把卡片墙撑到
-溢出一屏，好验证"自动换行 + 按整行向下滚动"。
-
-截图命令（这几个开关都不是可选的）：
-
-    chrome --headless --disable-gpu --hide-scrollbars --force-prefers-reduced-motion \\
-           --virtual-time-budget=30000 --window-size=1280,800 \\
-           --screenshot=绝对路径.png --dump-dom file:///绝对路径/index.html
-
-- `--virtual-time-budget` 必须**大于** SETTLE_MS，也要大于揭示队列的总时长
-  （一拍最多 `REVEAL_MAX_PER_TICK` 张，条数越多越久）。给小了会截到"还在往外浮"
-  的中间态——表现是 title 还停在 `cefscanw`，或者卡片只出来一小半。
-- `--force-prefers-reduced-motion`：否则卡片墙的"平滑滚动"在虚拟时间下走不完，
-  截图会停在未滚动的位置。
-- `--screenshot` 的路径必须是**绝对 Windows 路径**，相对路径会报"系统找不到指定的路径"。
-- `--dump-dom` 和 `--screenshot` 写在同一次调用里，两边才是同一个状态。
-  title 里带着几何指标，用 `grep -o '<title>[^<]*</title>'` 读出来。
-
-**无头截图会把视口放大**：`--window-size=1280,800` 下页面看到的是 1264x705，
-但截出来是 1280x800，而且页面收不到 resize 事件（`window.innerHeight` 自始至终
-是 705，`ResizeObserver` 也不触发）——那是合成层的重排。后果是截图那一刻最大滚动量
-变小、`scrollTop` 被夹回，卡片墙顶部会切掉小半行（切掉的正是 800-705 = 95 px）。
-**这是截图工具的假象，不是前端 bug**：滚到顶（scrollTop=0，夹不动）再量，行顶边
-精确落在 `padTop + k*行距` = 0 / 106 / 212 / 318 / 424 / 530（行距 = `--card-h` 95 +
-`--card-gap` 11；顶部区域已经挪到 `#cards` 外面，所以这里的 padTop 是 0）。所以经典
-模式截图前会先滚到顶，让画面可确定；"跟最新一行"的几何正确性看 title 里的 `对齐残差`
-（0 表示视口顶部正好落在行顶边上）。
-"""
+"""生成一份带假数据的 cefscanw 前端预览页（只用于本地看效果，不入库）。"""
 import pathlib
 import shutil
 import sys
@@ -59,18 +24,12 @@ DEMO = [
      r"C:\Program Files (x86)\Tencent\WeMeet\wemeetapp.exe"),
 ]
 
-# 等状态落定的**上限**（毫秒）。注意它不是定长 sleep：driver 会轮询刷新胶囊是否
-# 恢复可用（`scanning` 一挂上它就 disabled），扫完就走。揭示节奏是"一拍最多几张"，
-# 总时长跟条数成正比，写死一个 sleep 迟早不够——这个值只要够大就行。
+# 等状态落定的上限（毫秒）。
 SETTLE_MS = 20000
 
 
 def js(value: object) -> str:
-    """把 Python 字面量写成 JavaScript 字面量。
-
-    注意 bool 必须先判：`isinstance(True, int)` 也是 True，直接走 repr 会写出
-    `True` / `False` —— 那不是 JavaScript，整个桩脚本会当场 ReferenceError。
-    """
+    """把 Python 字面量写成 JavaScript 字面量。"""
     if isinstance(value, bool):
         return "true" if value else "false"
     return repr(value)
@@ -93,11 +52,7 @@ def stub(rows: list[tuple]) -> str:
     encoded = ",\n".join(
         "        [" + ", ".join(js(v) for v in row) + "]" for row in rows
     )
-    # 整体包在 IIFE 里：经典脚本的顶层 `class` / `const` 进的是**全局词法作用域**，
-    # 而 main.js 顶层写的是 `const { invoke, Channel } = window.__TAURI__.core`。
-    # 如果这里直接 `class Channel {}`，那个名字就已经被占住了，main.js 会以
-    # "Identifier 'Channel' has already been declared" 整体解析失败——页面看起来
-    # 只是"点了按钮没反应"，非常难查。IIFE 里的声明不会泄漏到全局词法作用域。
+    # 整体包在 IIFE 里，避免顶层声明泄漏到全局词法作用域。
     return f"""    <script>
       (() => {{
         // 预览桩：假装自己是 Tauri，把真实的前端逻辑跑起来。
@@ -133,12 +88,7 @@ def stub(rows: list[tuple]) -> str:
 
 
 def driver(mode: str) -> str:
-    """选好模式、点开始扫描，等揭示队列放完，把状态写进 title 方便无头浏览器读。
-
-    title 里带上滚动指标（`--dump-dom` 能把它读出来）：卡片墙的"按整行滚动"
-    是纯几何计算，光看截图判断不了对齐对不对，得把行距、溢出量、目标位置
-    一起打出来才验得了。
-    """
+    """选好模式、点开始扫描，等揭示队列放完，把状态写进 title 方便无头浏览器读。"""
     if mode == "picker":
         return """    <script>
       // 初始选择页：什么都不点，只把当前视图写进 title 方便断言。
@@ -152,8 +102,7 @@ def driver(mode: str) -> str:
         const radio = document.getElementById({js('mode-' + mode)});
         if (radio) radio.checked = true;
         document.getElementById('start-button').click();
-        // 工具模式下选择页那个按钮**只切视图、不开扫**（得先让人把目录填了），
-        // 所以预览里还得自己点一下工具栏的"开始扫描"。
+        // 工具模式下还要再点一下工具栏的"开始扫描"。
         if ({js(mode)} === 'tool') document.getElementById('scan-button').click();
 
         const report = () => {{
@@ -164,8 +113,7 @@ def driver(mode: str) -> str:
           const padTop = Number.parseFloat(style.paddingTop) || 0;
           // 对齐判据：视口顶部落在行顶边上 ⟺ (scrollTop - padTop) 是行距的整数倍。
           const align = pitch > 0 ? (c.scrollTop - padTop) % pitch : 'n/a';
-          // 经典模式的结果显示是顶部那行条数（#classic-count），工具模式才是工具栏
-          // 那条状态行。两者文案格式不同，别读错。
+          // 经典模式的状态节点是 #classic-count，工具模式是 #status。
           const statusNode = document.getElementById(
             {js(mode)} === 'classic' ? 'classic-count' : 'status'
           );
@@ -183,21 +131,18 @@ def driver(mode: str) -> str:
             + ' 对齐残差=' + align;
         }};
 
-        // 扫完的标志是刷新胶囊恢复可用（`scanning` 一挂上它就 disabled）。轮询比定长
-        // sleep 稳：揭示节奏是"一拍最多 REVEAL_MAX_PER_TICK 张"，总时长跟条数成正比，
-        // 写死一个等待时长要么白等、要么截到"还在往外浮"的中间态。
+        // 扫完的标志是刷新胶囊恢复可用（`scanning` 一挂上它就 disabled）。
         const deadline = Date.now() + {SETTLE_MS};
         const settle = () => {{
           const busy = document.getElementById('classic-refresh').disabled;
           if (busy && Date.now() < deadline) {{ setTimeout(settle, 60); return; }}
           report();
-          // 截图前滚到顶：scrollTop=0 不会被无头截图的视口重排夹取，画面才可确定。
-          // （滚到底的话截出来会切掉小半行，那是截图工具的假象，见模块文档。）
+          // 截图前滚到顶，让画面可确定。
           if ({js(mode)} === 'classic') document.getElementById('cards').scrollTop = 0;
         }};
         setTimeout(settle, 0);
 
-        // resize 之后补报一次，用来确认前端那条"盒子变了就重新对齐"的分支有没有生效。
+        // resize 之后补报一次。
         window.addEventListener('resize', () => setTimeout(report, 0));
       }})();
     </script>

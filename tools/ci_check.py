@@ -1,15 +1,5 @@
 #!/usr/bin/env python3
-"""workflow 静态校验：YAML 可解析 + 每个 `run:` 过 `bash -n` + 注释块 ≤ 1 行 + 结构断言。
-
-改完 `.github/workflows/` 下的文件先跑这个。推上去试错一轮要十几分钟，还会多出一个
-alpha Release，而这些错（YAML 缩进、shell 语法、触发写歪、job 依赖漏挂）本地全都能挡。
-
-需要 pyyaml，用托管 venv 的解释器跑：
-
-    "C:/Users/16695/.workbuddy-ai/binaries/python/envs/default/Scripts/python.exe" tools/ci_check.py
-
-不入库之外的依赖，也不联网。
-"""
+"""workflow 静态校验：YAML 可解析 + 每个 `run:` 过 `bash -n` + 注释块 ≤ 1 行 + 结构断言。"""
 
 from __future__ import annotations
 
@@ -22,15 +12,14 @@ import yaml
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 WORKFLOWS = ROOT / ".github" / "workflows"
 
-# 单个连续注释块（相邻的 `#` 行）允许的最大行数。跟 Suwayomi-next 的约定一致：
-# 决策与背景写进 docs，workflow 里只留一行提示。
+# 单个连续注释块（相邻的 `#` 行）允许的最大行数。
 MAX_COMMENT_BLOCK = 1
 
 failures: list[str] = []
 
 
 def _find_bash() -> str:
-    """点名 Git 自带的 bash.exe：PATH 里靠前的那个是 System32 下的 WSL 转发器。"""
+    """找 Git 自带的 bash.exe。"""
     for candidate in (
         pathlib.Path(r"C:\Program Files\Git\usr\bin\bash.exe"),
         pathlib.Path(r"C:\Program Files (x86)\Git\usr\bin\bash.exe"),
@@ -92,7 +81,7 @@ def comment_blocks(text: str) -> list[tuple[int, int, str]]:
 
 
 def triggers(doc: dict) -> dict:
-    """`on:` 在 YAML 1.1 里是布尔字面量，safe_load 会把键解析成 True —— 两种都认。"""
+    """返回 `on:` 触发配置。"""
     value = doc.get("on", doc.get(True))
     return value if isinstance(value, dict) else {}
 
@@ -122,7 +111,7 @@ def main() -> int:
             "; ".join(f"L{b[0]} {b[1]} 行：{b[2][:40]}" for b in long_blocks),
         )
 
-        # 结构断言：触发方式与 job 依赖写歪了最难在本地看出来（推上去才知道根本没触发）。
+        # 结构断言：触发方式与 job 依赖。
         jobs = set((doc.get("jobs") or {}).keys())
         trig = triggers(doc)
         if name == "lint.yml":

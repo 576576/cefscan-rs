@@ -1,8 +1,4 @@
 //! 把候选文件归并成"应用"。
-//!
-//! 同一个应用往往留下多个候选（`libcef.dll`、`chrome_100_percent.pak`、
-//! `libnode.dll`），它们共享一个根目录；反过来一个目录里没找到签名时，
-//! 还要向上退一层再试（Electron 常见 `resources/` 布局）。
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
@@ -71,8 +67,7 @@ pub fn group(candidates: &[Candidate], threads: usize) -> Vec<DetectedApp> {
 
     let mut apps: BTreeMap<PathBuf, DetectedApp> = BTreeMap::new();
     for dir in &dirs {
-        // 回退到父目录时，root 也要跟着迁到父目录，否则会出现
-        // "展示路径在上层、计量目录在子层"的错位。
+        // 回退到父目录时，root 也要跟着迁到父目录。
         let (root, inspection) = inspection_for(&inspections, dir);
         let default_kind = if standard_dirs.get(dir).is_some_and(|flags| flags.cef) {
             AppKind::Cef
@@ -155,7 +150,7 @@ fn insert(apps: &mut BTreeMap<PathBuf, DetectedApp>, detected: DetectedApp) {
     }
 }
 
-/// 丢掉"未识别但被某个已识别应用包含"的目录，避免同一应用出现两条。
+/// 丢掉"未识别但被某个已识别应用包含"的目录。
 fn drop_apps_nested_in_identified_roots(apps: &mut BTreeMap<PathBuf, DetectedApp>) {
     let identified: Vec<PathBuf> = apps
         .values()
@@ -177,8 +172,7 @@ fn drop_apps_nested_in_identified_roots(apps: &mut BTreeMap<PathBuf, DetectedApp
     }
 }
 
-/// 并行检查一批目录。每个线程独立持有一份 `SignatureScanner`（内部是
-/// 预构建的 `memmem::Finder`，跨线程共享要加锁，不如各建一份）。
+/// 并行检查一批目录。
 fn inspect_parallel(
     dirs: &[PathBuf],
     flavor: Flavor,

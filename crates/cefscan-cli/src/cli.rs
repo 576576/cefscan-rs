@@ -9,11 +9,10 @@ use clap::{Parser, ValueEnum};
 pub enum BackendArg {
     /// 优先索引后端（Windows 上的 Everything IPC），不可用则回落到 cefscan 遍历
     Auto,
+    /// 只用 cefscan 遍历后端
+    Cefscan,
     /// 只用索引后端
     Index,
-    /// 只用 cefscan 遍历后端
-    #[value(alias = "filesystem")]
-    Cefscan,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -23,9 +22,7 @@ pub enum SortArg {
     Kind,
 }
 
-/// 版本号：CI 会按提交数推导出形如 `0.123` 的值，用 `CEFSCAN_BUILD_VERSION` 在编译期
-/// 注入（见 .github/workflows/build.yml），这样 `cefscan --version` 与 Release 名对得上。
-/// 本地构建没有这个环境变量，回落到 Cargo.toml 的 workspace version。
+/// 版本号，编译期由 `CEFSCAN_BUILD_VERSION` 注入，缺省回落到 Cargo.toml 的 workspace version。
 const VERSION: &str = match option_env!("CEFSCAN_BUILD_VERSION") {
     Some(value) => value,
     None => env!("CARGO_PKG_VERSION"),
@@ -110,8 +107,8 @@ impl Cli {
             roots: self.root.clone(),
             backend: match self.backend {
                 BackendArg::Auto => Backend::Auto,
-                BackendArg::Index => Backend::Index,
                 BackendArg::Cefscan => Backend::Filesystem,
+                BackendArg::Index => Backend::Index,
             },
             walk_threads: self.threads,
             scan_threads: self.threads,
@@ -205,5 +202,31 @@ mod tests {
         assert_eq!(parse_kind("electron").unwrap(), AppKind::Electron);
         assert_eq!(parse_kind("Mini_Electron").unwrap(), AppKind::MiniElectron);
         assert!(parse_kind("firefox").is_err());
+    }
+
+    /// `--backend` 的取值集合与顺序（`auto` / `cefscan` / `index`）。
+    #[test]
+    fn backend_values_and_order_are_fixed() {
+        for value in ["auto", "cefscan", "index"] {
+            assert!(
+                Cli::try_parse_from(["cefscan", "--backend", value]).is_ok(),
+                "取值 {value} 应该被接受"
+            );
+        }
+
+        assert!(Cli::try_parse_from(["cefscan", "--backend", "filesystem"]).is_err());
+
+        let help = Cli::try_parse_from(["cefscan", "--help"])
+            .unwrap_err()
+            .to_string();
+        let position = |needle: &str| {
+            help.find(needle)
+                .unwrap_or_else(|| panic!("--help 里找不到 {needle}：\n{help}"))
+        };
+        assert!(
+            position("- auto:") < position("- cefscan:")
+                && position("- cefscan:") < position("- index:"),
+            "--help 里的取值次序应为 auto / cefscan / index：\n{help}"
+        );
     }
 }

@@ -1,8 +1,4 @@
 //! 运行中进程检测。
-//!
-//! Windows 侧的两个坑：一是受保护进程 `OpenProcess` 会失败，必须静默跳过；
-//! 二是进程路径可能是 `\\?\C:\...` 或 `\\?\UNC\...`，必须先归一化再比对，
-//! 否则"正在运行"永远判不出来。
 
 use std::collections::HashSet;
 use std::path::Path;

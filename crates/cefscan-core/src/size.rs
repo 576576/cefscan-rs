@@ -1,6 +1,4 @@
 //! 磁盘占用统计。
-//!
-//! 各应用的根目录互不相关，是天然的并行任务，直接交给 rayon。
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::collections::HashSet;
@@ -15,8 +13,6 @@ struct FileId {
 }
 
 /// 累加一个目录树下的文件大小。
-///
-/// 用显式栈而不是递归：目录深度不可控，递归有爆栈风险。
 pub fn dir_size(path: &Path) -> u64 {
     let mut total = 0_u64;
     let mut pending = vec![path.to_path_buf()];
@@ -32,7 +28,7 @@ pub fn dir_size(path: &Path) -> u64 {
                 continue;
             };
 
-            // 硬链接会让同一个文件被重复计数（Windows 的 WinSxS 尤其明显）。
+            // 按 (device, inode) 去重，避免硬链接被重复计数。
             #[cfg(any(target_os = "linux", target_os = "macos"))]
             {
                 use std::os::unix::fs::MetadataExt;
@@ -44,9 +40,7 @@ pub fn dir_size(path: &Path) -> u64 {
                 }
             }
 
-            // 只累加**文件**大小。目录 inode 自身的 `st_size` 在 ext4 上是 4096、
-            // 在 NTFS 上是 0，把它算进去会让同一棵树在两个平台上得出不同的"占用"
-            // （实测：一个只放 350 字节文件的目录在 Linux 上会报 4446）。
+            // 只累加文件大小。
             let is_dir = metadata.file_type().is_dir();
             if !is_dir {
                 total = total.saturating_add(metadata.len());
@@ -66,10 +60,7 @@ pub fn dir_size(path: &Path) -> u64 {
 /// 并行统计一批目录，**每算完一个就回调一次**，不等整批结束。
 ///
 /// 回调顺序不保证（取决于哪个目录先算完），调用方需要确定性顺序就自己排序。
-/// 之所以要边算边回调：应用根目录之间大小差异极大，小的几十 MB、大的几个 GB，
-/// 等最慢的那个算完再一次性返回，用户会盯着空列表看很久。
-///
-/// 回调签名里的 `index` 是 `paths` 中的下标，方便调用方回查原始数据。
+/// 回调签名里的 `index` 是 `paths` 中的下标。
 pub fn sizes_parallel_each<F>(paths: &[PathBuf], threads: usize, on_size: F)
 where
     F: Fn(usize, &Path, u64) + Send + Sync,
@@ -120,8 +111,7 @@ mod tests {
         fs::write(root.join("a.bin"), vec![0_u8; 100]).unwrap();
         fs::write(root.join("nested").join("b.bin"), vec![0_u8; 250]).unwrap();
 
-        // 100 + 250，目录 inode 自身的大小不算在内——ext4 上目录的 st_size 是 4096，
-        // 算进去这个断言就会变成 4446（两个平台结果不一致）。
+        // 100 + 250，目录 inode 自身的大小不算在内。
         assert_eq!(dir_size(&root), 350);
         let parallel = sizes_parallel(std::slice::from_ref(&root), 4);
         assert_eq!(parallel, vec![350]);

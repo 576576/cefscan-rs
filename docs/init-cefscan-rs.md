@@ -326,7 +326,7 @@ cefscan benchmark [--rounds N]    # 自测耗时与峰值内存
   -f, --format <table|json|csv|toml|ndjson>   默认 table
   -o, --output <FILE>                         写文件（默认覆写，--no-overwrite 时冲突即报错）
       --root <DIR>               可重复；不传则全盘
-      --backend <auto|index|cefscan>
+      --backend <auto|cefscan|index>
       --exclude-dir <NAME>       可重复
       --exclude-path <PATH>      可重复
       --kind <electron|nwjs|...> 可重复，过滤类型
@@ -414,10 +414,11 @@ cefscan benchmark [--rounds N]    # 自测耗时与峰值内存
 显示名能自动跟着变，前端和 CLI 都不用改。GUI 汇总区、CLI 的 stderr 摘要都直接
 读 `stats.backend`，所以改后端名只需要动 core 里那两个常量。
 
-**CLI 的 `--backend` 取值跟着一起叫 `cefscan`**（`auto|index|cefscan`），不再叫
+**CLI 的 `--backend` 取值跟着一起叫 `cefscan`**（`auto|cefscan|index`），不再叫
 `filesystem`：用户看到的"后端"就是"谁去找的"，遍历后端就是 cefscan 自己，
-显示名和选项名各叫一套只会让人对不上。`BackendArg::Cefscan` 上挂了
-`#[value(alias = "filesystem")]`，旧写法仍然能用，但不出现在 `--help` 和报错提示里。
+显示名和选项名各叫一套只会让人对不上。取值**次序**由 enum 变体声明次序决定，
+一并决定 `--help` 里的展示次序，所以 `Cefscan` 排在 `Index` 前面。
+`filesystem` 这个旧值**不留兼容 alias**（2026-10-04 移除），旧写法会直接报参数错误。
 core 里的枚举仍叫 `Backend::Filesystem`——它描述的是机制（文件系统遍历），
 对外名字由 `FILESYSTEM_BACKEND` 那个常量决定。
 
@@ -659,7 +660,7 @@ startButton.addEventListener('click', () => {
 
 - **只改一个是不行的**。只压 `--card-min` 会让卡片变成又窄又高的怪比例；只压
   `--card-h` 则会重新切掉应用名的下伸笔画（见上一节那笔账）。所以这一组要当成
-  **一个数**来调，`styles.css` 里的注释也这么写。
+  **一个数**来调（密度 = 一屏能放几张，跟 `(card-min+gap) × (card-h+gap)` 成反比）。
 - 内容尺寸必须**同比**跟着收：图标槽 40 → 32（`styles.css` 的 `.card-icon` 和
   `main.js` 的 `cardIconHtml` 两处，改一处卡片高度就会参差不齐）、名称字号
   14 → 13、占用字号 12 → 11。
@@ -821,7 +822,7 @@ startButton.addEventListener('click', () => {
    桩**不能替代**截图：真实 DOM 的布局和 CSS 层叠它完全看不见，`[hidden]` 被
    `.summary { display: flex }` 压掉那个 bug 就只有截图才发现得了。
 
-三个坑写在 `preview_ui.py` 的注释里：① 桩必须整体包在 IIFE 里（经典脚本的顶层
+三个坑（原先写在 `preview_ui.py` 的注释里，已上移到本节）：① 桩必须整体包在 IIFE 里（经典脚本的顶层
 `class Channel {}` 会占住全局词法作用域的名字，而 `main.js` 顶层写的正是
 `const { invoke, Channel } = …`，会以"Identifier 'Channel' has already been
 declared"整体解析失败，表现只是"点了按钮没反应"）；② Python 的 `True` / `False`
@@ -884,12 +885,6 @@ declared"整体解析失败，表现只是"点了按钮没反应"）；② Pytho
   不完整的画面——实测遇到过"表格和复选框都在、唯独按钮那块是空的"。这种帧偶发，
   所以 `locate_start_button` 失败时会重新聚焦再抓一次（最多 3 次），而不是直接判失败。
 
-- **必须硬性置顶**（`SetWindowPos(HWND_TOPMOST)`）。脚本抓的是**屏幕**，只调
-  `SetForegroundWindow` 的话，Windows 允许前台进程拒绝让出前台权，从终端里跑
-  经常静默失败，窗口还压在终端后面——于是抓回一整张终端内容，还会因为终端里的
-  蓝色链接文字匹配上强调色而"找到"一个假按钮。症状是"整窗都是同一种深灰"，
-  非常难判断。收尾有 `unpin()` 取消置顶。
-- **找按钮的判据从"取最右一簇"改成"够宽 且 填充率 >= 0.5"**。选择页是深色，
 **路径列折叠**：按**分隔符切段**折叠，不是按字符数切——前面只留「根 + 3 层目录」
 （`PATH_HEAD_SEGMENTS`），中间省略号，后面只留文件名，这样尾部一定是完整的文件名：
 ```

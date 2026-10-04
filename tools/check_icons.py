@@ -1,25 +1,5 @@
 #!/usr/bin/env python3
-"""校验 tauri.conf.json 里 ``bundle.icon`` 引用的图标文件。
-
-存在的理由：下面两个约束**只在 Unix 目标上生效**，在 Windows 上完全看不出来，
-所以本地开发和 Windows CI 都发现不了，只有 Linux 构建会在
-``tauri::generate_context!`` 里 panic（表现为 "proc macro panicked: failed to
-open icon ...: No such file or directory"）：
-
-1. ``icons/icon.png`` 必须存在。``tauri-codegen`` 在非 Windows 目标上从
-   ``bundle.icon`` 里挑第一个 ``.png``，挑不到就退回硬编码的 ``icons/icon.png``。
-2. 那张 PNG 必须是 **RGBA**（色彩类型 6）。``CachedIcon::new_png`` 会检查
-   ``png::ColorType::Rgba``，RGB 或调色板都会 panic。
-
-Windows 走的是另一条路（``default_window_icon_from_app_icon_resource``，用
-``.ico`` 编出来的资源），所以只跑 Windows 是验证不到这两条的。
-
-CI 的 lint job 会跑这个脚本，把「编译 5 分钟后才炸」变成「1 秒报错」。
-
-用法::
-
-    python tools/check_icons.py
-"""
+"""校验 tauri.conf.json 里 ``bundle.icon`` 引用的图标文件。"""
 
 from __future__ import annotations
 
@@ -32,7 +12,7 @@ CONFIG = Path("crates/cefscan-desktop/src-tauri/tauri.conf.json")
 # PNG 色彩类型：6 = 真彩 + alpha。
 RGBA = 6
 
-# tauri-codegen 的 find_icon 在挑不到 .png 时用的兜底路径，这里必须跟着变。
+# 挑不到 .png 时使用的兜底路径。
 PNG_FALLBACK = "icons/icon.png"
 
 
@@ -62,7 +42,7 @@ def main() -> int:
     if not (root / ico).is_file():
         problems.append(f"Windows 资源图标缺失：{ico}")
 
-    # Unix：tauri-codegen 找第一个 .png，语义与 find_icon 保持一致。
+    # Unix：tauri-codegen 找第一个 .png。
     png = next((name for name in icons if name.endswith(".png")), PNG_FALLBACK)
     png_path = root / png
     if not png_path.is_file():

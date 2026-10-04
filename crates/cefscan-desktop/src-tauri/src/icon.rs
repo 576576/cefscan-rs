@@ -1,26 +1,13 @@
 //! 从 Windows 系统关联里取出可执行文件的图标，编码成 PNG data URL 交给前端。
-//!
-//! 链路：`SHGetFileInfoW`（拿 HICON）→ `GetIconInfo`（拆出彩色位图与掩码）
-//! → `GetDIBits` 取 32bpp BGRA → 补 alpha → PNG → base64。
-//!
-//! 为什么不用 `DrawIconEx` 画进 DIB：那条路是否保留 32bpp 图标的 alpha 通道
-//! 取决于具体 GDI 实现，而 `GetDIBits` 拿到的是位图原始像素，行为确定。代价是
-//! 老式"只有 AND 掩码、没有 alpha 通道"的图标要自己按掩码补透明度。
-//!
-//! 取图标这一段是**全局串行**的：`SHGetFileInfoW` 并发调用会偶发失败，
-//! 细节见 `imp::capture`。
 
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Mutex, OnceLock};
 
-/// 结果按路径缓存。同一个 exe 在结果列表里可能重复出现，而且每次
-/// `SHGetFileInfoW` 都要碰一次 shell，缓存能省下可观的开销。
+/// 结果按路径缓存。
 static CACHE: OnceLock<Mutex<HashMap<String, Option<String>>>> = OnceLock::new();
 
 /// 返回 `data:image/png;base64,...`；取不到图标时返回 `None`。
-///
-/// 失败会被当成正常结果缓存下来——同一个路径没必要反复去 shell 里问。
 pub fn data_url(path: &Path) -> Option<String> {
     let key = path.to_string_lossy().into_owned();
     let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
@@ -53,11 +40,10 @@ mod imp {
     use windows_sys::Win32::UI::Shell::{SHFILEINFOW, SHGFI_ICON, SHGFI_LARGEICON, SHGetFileInfoW};
     use windows_sys::Win32::UI::WindowsAndMessaging::{DestroyIcon, GetIconInfo, HICON, ICONINFO};
 
-    /// 图标最大边长。`SHGFI_LARGEICON` 一般给 32，个别皮肤给到 48，再大就截。
+    /// 图标最大边长，超过就截断。
     const MAX_SIDE: i32 = 128;
 
-    // `SHGetFileInfoW` 要求调用线程先初始化 COM。同一线程重复初始化只会返回
-    // `S_FALSE`，所以用 thread-local 挡一下，避免每次都白跑一趟。
+    // `SHGetFileInfoW` 要求调用线程先初始化 COM，用 thread-local 记录是否已初始化。
     thread_local! {
         static COM_READY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     }
@@ -75,21 +61,12 @@ mod imp {
     }
 
     pub(super) fn extract(path: &Path) -> Option<String> {
-        // 取像素要串行，编码不用，所以锁在 capture 里而不是这里。
         let (rgba, side) = capture(path)?;
         encode_png(&rgba, side)
     }
 
     /// 取图标的 RGBA 像素。**必须串行调用。**
-    ///
-    /// `SHGetFileInfoW` 对并发调用不安全：4 个线程同时问同一个 exe，240 次里
-    /// 有 3 次直接返回 0（拿不到 HICON）。失败点在 shell 调用本身——同一轮实测
-    /// 里 `GetIconInfo` / `GetDIBits` 都是 0 次失败，所以不是我们销毁句柄的问题。
-    /// 加这把锁之后同样的并发跑到 0 失败。
-    ///
-    /// 代价可以忽略：结果本来就按路径缓存，一次扫描最多几十个不同的 exe。
     fn capture(path: &Path) -> Option<(Vec<u8>, u32)> {
-        // 锁中毒说明上一次调用 panic 了；图标是可有可无的装饰，接着用就行。
         static LOCK: Mutex<()> = Mutex::new(());
         let _guard = LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
 
@@ -150,8 +127,7 @@ mod imp {
         pixels.map(|rgba| (rgba, side as u32))
     }
 
-    /// 量一下图标边长。单色图标的掩码是 AND+XOR 两半叠起来的，但那种图标
-    /// 会在 `read_pixels` 里因为拿不到彩色位图被拒掉，这里不必特殊处理。
+    /// 量一下图标边长。
     fn measure(color: HBITMAP, mask: HBITMAP) -> i32 {
         let probe = if color.is_null() { mask } else { color };
         let mut bitmap: BITMAP = unsafe { zeroed() };
@@ -171,7 +147,7 @@ mod imp {
 
     /// 读彩色位图的像素，必要时按掩码补出 alpha。
     fn read_pixels(color: HBITMAP, mask: HBITMAP, side: i32) -> Option<Vec<u8>> {
-        // 纯单色图标没有彩色位图，我们没有可用的颜色，直接放弃。
+        // 没有彩色位图时直接放弃。
         if color.is_null() {
             return None;
         }
@@ -230,7 +206,7 @@ mod imp {
             bmiHeader: BITMAPINFOHEADER {
                 biSize: size_of::<BITMAPINFOHEADER>() as u32,
                 biWidth: side,
-                // 负高度 = 自顶向下，省掉一次上下翻转。
+                // 负高度 = 自顶向下。
                 biHeight: -side,
                 biPlanes: 1,
                 biBitCount: 32,
@@ -288,7 +264,7 @@ mod tests {
 
     use super::*;
 
-    /// 拿测试进程自己的 exe 当样本：一定有图标，而且路径稳定可复现。
+    /// 拿测试进程自己的 exe 当样本。
     fn sample_exe() -> PathBuf {
         std::env::current_exe().expect("测试进程自己的路径")
     }
@@ -315,8 +291,7 @@ mod tests {
         assert!((16..=128).contains(&width), "边长 {width} 超出预期");
     }
 
-    /// 这条是防"alpha 补错了"的：如果彩色位图没有 alpha 又没走掩码分支，
-    /// 或者 GetDIBits 参数写错，整张图会是全透明——前端看上去就是一个空白格。
+    /// 断言图标不是全透明的。
     #[test]
     fn the_icon_actually_has_opaque_pixels() {
         let bytes = decode(&data_url(&sample_exe()).expect("exe 应当有图标"));
@@ -340,12 +315,7 @@ mod tests {
         assert_eq!(data_url(&missing), None);
     }
 
-    /// 回归测试：`SHGetFileInfoW` 不能并发调用。
-    ///
-    /// 不加锁时实测 4 线程 240 次里有 3 次拿不到 HICON（`extract` 返回 None），
-    /// 表现为界面上偶发少一个图标、测试偶发红。锁加在 `imp::capture` 里。
-    /// 这里直接打 `extract` 而不是 `data_url`，否则会被结果缓存挡住、
-    /// 根本走不到 shell 调用。
+    /// 断言并发取同一个 exe 的图标不会失败。
     #[test]
     fn concurrent_extraction_never_fails() {
         let exe = sample_exe();
