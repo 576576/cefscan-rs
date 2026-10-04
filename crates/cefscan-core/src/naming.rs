@@ -4,11 +4,14 @@
 //! 通常没法看：`...\Microsoft VS Code\Code.exe` 会显示成 "Code"，
 //! `...\Edge\Application\154.0.4258.37\msedge.exe` 会显示成 "msedge"。
 //!
-//! 所以这里从路径所在目录往上走，跳过版本号目录（`154.0.4258.37`、`app-3.6.6`）
-//! 和通用目录名（`Application`、`Bin64`、`runtime`），取第一个有意义的名字；
-//! 走到用户目录/系统目录这类"边界"就停下，退回文件名本身。
+//! 所以这里从路径所在目录往上走，跳过三类"不是应用名"的目录，取第一个有意义的名字：
 //!
-//! 纯字符串逻辑，不碰文件系统，所以好测。
+//! - 版本号目录（`154.0.4258.37`、`app-3.6.6`、`Workstation-17.0.0`）；
+//! - 通用目录名（`Application`、`Bin64`、`runtime`、`64bit`）；
+//! - 通用后缀目录（`BH3_Data`、`App_Data`、`Cache_Data` 这类 `<前缀>_Data`）。
+//!
+//! 走到用户目录/系统目录这类"边界"就停下，退回文件名本身。纯字符串逻辑，
+//! 不碰文件系统，所以好测。
 
 use std::ffi::OsStr;
 use std::path::Path;
@@ -16,8 +19,12 @@ use std::path::Path;
 /// 往上看多少层就放弃。
 const MAX_DEPTH: usize = 6;
 
-/// 通用目录名：夹在应用名和根目录之间，但不是应用名本身。
+/// 通用目录名：夹在应用名和根目录之间，但不是应用名本身。按整段精确匹配（忽略大小写）。
 const GENERIC_SEGMENTS: &[&str] = &[
+    "32-bit",
+    "32bit",
+    "64-bit",
+    "64bit",
     "addons",
     "amd64",
     "app",
@@ -25,6 +32,7 @@ const GENERIC_SEGMENTS: &[&str] = &[
     "applications",
     "apps",
     "bin",
+    "bin32",
     "bin64",
     "binaries",
     "build",
@@ -53,6 +61,13 @@ const GENERIC_SEGMENTS: &[&str] = &[
     "x64",
     "x86",
 ];
+
+/// 通用后缀：整段不是应用名，但前缀那截才是，所以要整段跳过。
+///
+/// 主要收 `_Data` 家族：Unity 的 `<产品名>_Data`（`BH3_Data`）、ASP.NET 的
+/// `App_Data`，以及 `Cache_Data` / `crash_data` / `module_data` 这类缓存目录 ——
+/// 本机就能捞出十几种写法，穷举不划算，按后缀匹配更稳。忽略大小写。
+const GENERIC_SUFFIXES: &[&str] = &["_data"];
 
 /// 走到这些名字就停：再往上就是用户目录或系统目录，取到的名字没有意义。
 const STOP_SEGMENTS: &[&str] = &[
@@ -125,9 +140,16 @@ fn strip_package_suffix(name: &str) -> &str {
 }
 
 fn is_generic(name: &str) -> bool {
-    GENERIC_SEGMENTS
+    if GENERIC_SEGMENTS
         .iter()
         .any(|candidate| name.eq_ignore_ascii_case(candidate))
+    {
+        return true;
+    }
+    let lower = name.to_ascii_lowercase();
+    GENERIC_SUFFIXES
+        .iter()
+        .any(|suffix| lower.ends_with(suffix))
 }
 
 fn is_stop_segment(name: &str) -> bool {
@@ -208,6 +230,16 @@ mod tests {
             (
                 r"C:\Program Files\WindowsApps\Crystalnix.Termius_10.1.0.0_x64__0m0t0j9spf6x8\app\Termius.exe",
                 "Crystalnix.Termius",
+            ),
+            // Unity 的 `<产品名>_Data` 是数据目录，要连着上面的 `Plugins` 一起跳过。
+            (
+                r"D:\Program Files\miHoYo\Honkai Impact 3rd Game\BH3_Data\Plugins\APM4webCrashR.exe",
+                "Honkai Impact 3rd Game",
+            ),
+            // 位数目录（`64bit`）和它上面的版本号目录（`Workstation-17.0.0`）都要跳过。
+            (
+                r"C:\Program Files (x86)\VMware\VMware VIX\Workstation-17.0.0\64bit\vix.dll",
+                "VMware VIX",
             ),
         ];
 
@@ -294,6 +326,33 @@ mod tests {
         assert!(!is_version_like("Code"));
         assert!(!is_version_like("7-Zip"));
         assert!(!is_version_like("Microsoft VS Code"));
+    }
+
+    #[test]
+    fn generic_detection_covers_bitness_and_data_suffix() {
+        // 整段精确匹配，大小写不敏感。
+        assert!(is_generic("Application"));
+        assert!(is_generic("64bit"));
+        assert!(is_generic("64BIT"));
+        assert!(is_generic("32bit"));
+        assert!(is_generic("Bin64"));
+
+        // `_Data` 后缀：前缀随便是什么都算，且大小写不敏感。
+        assert!(is_generic("BH3_Data"));
+        assert!(is_generic("App_Data"));
+        assert!(is_generic("Cache_Data"));
+        assert!(is_generic("crash_data"));
+        assert!(is_generic("module_data"));
+        assert!(is_generic("_soundfile_data"));
+        assert!(is_generic("_Data")); // 整段就是后缀，没有前缀
+
+        // 真名不能被误伤。
+        assert!(!is_generic("Honkai Impact 3rd Game"));
+        assert!(!is_generic("VMware VIX"));
+        assert!(!is_generic("BeamNG.drive"));
+        assert!(!is_generic("Code"));
+        // 裸 `Data` 不带下划线，不算 `_Data` 后缀（见模块内注释的取舍）。
+        assert!(!is_generic("Data"));
     }
 
     #[test]

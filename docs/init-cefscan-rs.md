@@ -505,12 +505,14 @@ Tauri 侧是 `detect_backend` 命令，返回 `BackendProbe { backend }`——**
 扫描结果里的 path 是"最能代表这个应用的那个文件或目录"，直接当名字没法看
 （`...\Microsoft VS Code\Code.exe` → "Code"，`...\Edge\Application\154.0.4258.37\msedge.exe` → "msedge"）。
 启发式是**纯字符串**的（不碰文件系统，因此好测）：从所在目录往上走最多 6 层，
-跳过版本号目录（`154.0.4258.37`、`app-3.6.6`、`office6`）和通用目录名
-（`Application`/`Bin64`/`runtime`/`resources`…），取第一个有意义的段；撞到
-用户/系统目录（`Programs`、`LocalAppData`、`steamapps`…）就停，退回文件名。
+跳过三类"不是应用名"的目录 —— 版本号目录（`154.0.4258.37`、`app-3.6.6`、
+`Workstation-17.0.0`）、通用目录名（`Application`/`Bin64`/`runtime`/`64bit`…）、
+通用后缀目录（`BH3_Data`、`App_Data`、`Cache_Data` 这类 `<前缀>_Data`，按后缀匹配
+而非穷举），取第一个有意义的段；撞到用户/系统目录（`Programs`、`LocalAppData`、
+`steamapps`…）就停，退回文件名。
 `is_version_like` 的判据是"剥掉前导字母和分隔符后剩下纯数字+点/横线/下划线"——
 这样 `BeamNG.drive`（剥完是空）和 `360se6`（含字母）不会被误判成版本号。
-测试里有一张 11 条真实路径的期望值表，改启发式先看那张表。
+测试里有一张 13 条真实路径的期望值表，改启发式先看那张表。
 
 **图标列**：`crates/cefscan-desktop/src-tauri/src/icon.rs`，链路是
 `SHGetFileInfoW(SHGFI_ICON|SHGFI_LARGEICON)` → `HICON` → `GetIconInfo` 拆出彩色位图与掩码
