@@ -56,7 +56,7 @@
 | **M2 签名扫描** | `signature.rs`、`inspect.rs`；签名表 + rank + 分块重叠 + magic 过滤 | 分块边界、跨块强签名、8 种 Mach-O magic 用例全绿 |
 | **M3 分组计量 + CLI** | `group.rs`、`size.rs`、`process.rs`、`scan.rs`、CLI（table/json/csv/toml） | 输出符合 `docs/schema.md`；运行进程高亮在 Windows 实测有效 |
 | **M4 Everything 后端** | `scan/everything.rs`、IPC 协议、超时、自动回落 | 装了 Everything 的机器上秒级出结果；未装 / 精简版时自动回落且不失败 |
-| **M5 性能专项** | 并行签名扫描、预构建 Finder、热路径去分配、benchmark 工具 | 与 M4 基线对比有可量化提升并写入 [`performance.md`](performance.md) |
+| **M5 性能专项** | 并行签名扫描、预构建 Finder、热路径去分配 | 与 M4 基线对比有可量化提升并写入 [`performance.md`](performance.md) |
 | **M6 Tauri 2 GUI** | `cefscan-desktop`、手写前端、流式 Channel、资源管理器定位 | 冷启动 < 1.5 s；扫描过程中列表渐进增长不卡 UI；点击能正确定位 |
 | **M7 发布工程** | Release workflow、版本号推导与注入、`docs/schema.md` 冻结 | 三个通道都能产出可下载产物；版本号由提交数推导并注入二进制 |
 

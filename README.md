@@ -80,7 +80,6 @@ crates/
   cefscan-cli/        CLI 二进制 cefscan
   cefscan-desktop/    Tauri 2 GUI 二进制 cefscanw，ui/ 是手写原生前端
 tools/                图标生成、前端校验、截图预览、冒烟测试等脚本
-benchmarks/           与 ignore / fsindex 的遍历性能对比
 docs/                 user-guide.md（用户指南）+ agent/（开发者文档）+ schema.md
 ```
 

@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """生成一份带假数据的 cefscanw 前端预览页（只用于本地看效果，不入库）。"""
 import pathlib
 import shutil

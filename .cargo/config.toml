@@ -1,9 +1,4 @@
-# 静态链接 MSVC 运行时：产物只依赖 Windows 自带的核心 DLL
-# （KERNEL32 / user32 / ntdll …），不需要额外的 VCRUNTIME140.dll，
-# 也不需要 UCRT 的 api-ms-win-crt-* 转发 DLL。
-#
-# 代价是二进制略大一点，换来的是一份拷贝到任何 Win10/11 上都能直接跑。
-
+# 静态链接 MSVC 运行时：产物只依赖 Windows 自带的核心 DLL。
 [target.x86_64-pc-windows-msvc]
 rustflags = ["-C", "target-feature=+crt-static"]
 

@@ -83,12 +83,24 @@ cefscan-rs/
 │   ├── schema.md              # 输出 schema 契约（冻结后不得随意变更）
 │   └── agent/                 # 开发者文档（本目录）
 ├── tools/                     # 图标生成、前端校验、截图预览、冒烟测试等脚本
-├── benchmarks/bench-ignore/   # 与 ignore / fsindex 的遍历性能对比
 └── dist/                      # 本地与 CI 的产物收集目录（.gitignore 内）
 ```
 
 > crate 名不带 `-rs` 后缀（仓库名带）；MSRV 由 `[workspace.package] rust-version` 声明，
 > 没有 `rust-toolchain.toml`（本地与 CI 都跟最新 stable）。
+
+**构建配置**：
+
+- `.cargo/config.toml` 给 Windows 目标（`x86_64` 与 `aarch64`）开了
+  `-C target-feature=+crt-static`，静态链接 MSVC 运行时 —— 产物只依赖 Windows 自带的核心
+  DLL（KERNEL32 / user32 / ntdll …），不需要额外的 `VCRUNTIME140.dll`，也不需要 UCRT 的
+  `api-ms-win-crt-*` 转发 DLL。代价是二进制略大一点，换来的是一份拷贝到任何 Win10/11 上
+  都能直接跑。
+- Cargo profile：`release` 走 `opt-level = 3` + `lto = "fat"` + `codegen-units = 1`
+  + `panic = "abort"` + `strip`（扫描器 IO 与 CPU 都吃紧，选速度优先）；
+  `dev` 保持 `opt-level = 0` 但给依赖开 `opt-level = 2`（本地 `cargo run` 的扫描速度才是
+  真实体感）；`ci` 继承 `dev` 但去掉 debuginfo 并把依赖压回 `opt-level = 0`
+  —— 详见 [`ci-release.md`](ci-release.md) §4。
 
 ## 4. 核心数据模型
 

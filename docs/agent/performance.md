@@ -14,11 +14,11 @@
 | ⑥ 提前剪枝 | 在目录层就砍掉 `node_modules`、`WinSxS`、`$Recycle.Bin`，比事后过滤省掉整个子树遍历。 |
 | ⑦ 线程本地缓冲 | 遍历线程各自持有 `Vec<Candidate>`，结束再合并，避免全量共享 `Arc<Mutex<Vec>>` 的锁竞争。 |
 | ⑧ 减少 stat | 复用 `DirEntry::file_type()` 已有的元数据，不额外 `fs::metadata`。 |
-| ⑨ 基准内建 | `benchmarks/bench-ignore/` 提供与 `ignore` / `fsindex` 的同机对比口径。 |
 
 ## 2. 实测基线
 
-本机 16 逻辑核 / NTFS。用 `benchmarks/bench-ignore` 实测（3 次取最优，单位 ms）。
+本机 16 逻辑核 / NTFS。下表是选型阶段用对比程序实测的（3 次取最优，单位 ms）。该对比程序
+（一个独立的 `bench-ignore` crate）在选型结束后已删除，数字保留作为基线存档。
 
 **A. 热缓存小树** `D:\Documents\GitHub`（13.1 万文件 + 1.3 万目录）
 

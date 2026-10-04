@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """把背景图从无损 WebP 转成有损 WebP q85。"""
 
 from __future__ import annotations
