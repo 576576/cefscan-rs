@@ -36,7 +36,7 @@ cefscan --backend cefscan --threads 8     # 强制遍历后端，指定线程数
 | 参数 | 说明 |
 | --- | --- |
 | `--root <DIR>` | 遍历起点，可重复；不指定则扫描所有盘符 |
-| `--backend <auto\|index\|cefscan>` | 搜索后端，默认 `auto`（旧值 `filesystem` 仍可用） |
+| `--backend <auto\|cefscan\|index>` | 搜索后端，默认 `auto` |
 | `--threads <N>` | 线程数，`0` 表示自动（默认上限 8） |
 | `-f, --format <table\|json\|ndjson\|csv\|toml>` | 输出格式 |
 | `-o, --output <FILE>` | 写文件而非 stdout |
@@ -48,8 +48,8 @@ cefscan --backend cefscan --threads 8     # 强制遍历后端，指定线程数
 
 退出码：`0` 成功（含 0 结果）、`1` 扫描失败、`2` 参数或配置错误。
 
-> 视图细节、卡片墙与路径折叠等说明见 **`docs/init-cefscan-rs.md`** §8；
-> 输出 schema 见 **`docs/schema.md`**。
+> 完整用法见 **[`docs/user-guide.md`](docs/user-guide.md)**；输出 schema 见
+> **[`docs/schema.md`](docs/schema.md)**。
 
 ## 项目特色
 
@@ -64,9 +64,9 @@ cefscan --backend cefscan --threads 8     # 强制遍历后端，指定线程数
 
 | 后端 | 平台 | 依赖 | 说明 |
 | --- | --- | --- | --- |
-| `index` | Windows | Everything（非精简版） | 走 IPC 查索引，毫秒级；不可用时自动回落 |
-| `cefscan` | 全平台 | 无 | 自写的 rayon 并行遍历 |
 | `auto` | — | — | 先试索引，失败回落遍历（默认，也是 GUI 唯一会用的） |
+| `cefscan` | 全平台 | 无 | 自写的 rayon 并行遍历 |
+| `index` | Windows | Everything（非精简版） | 走 IPC 查索引，毫秒级；不可用时自动回落 |
 
 默认排除 `node_modules`、`target`、回收站、`System Volume Information`，
 以及 Windows 的 `WinSxS` / `servicing` / `Recovery`。索引是全局的，
@@ -80,8 +80,8 @@ crates/
   cefscan-cli/        CLI 二进制 cefscan
   cefscan-desktop/    Tauri 2 GUI 二进制 cefscanw，ui/ 是手写原生前端
 tools/                图标生成、前端校验、截图预览、冒烟测试等脚本
-benchmarks/           与 ignore 的遍历性能对比
-docs/                 实施计划与输出 schema
+benchmarks/           与 ignore / fsindex 的遍历性能对比
+docs/                 user-guide.md（用户指南）+ agent/（开发者文档）+ schema.md
 ```
 
 ## 从源码构建
@@ -135,13 +135,15 @@ python tools/check_icons.py                            # 图标齐全且为 RGBA
 python tools/ci_check.py                               # 改 workflow 后先静态校验（需 pyyaml）
 ```
 
-CI 是三个 workflow（`lint` / `build` / `release`），约定见 **`docs/init-cefscan-rs.md`** §10.3；
+CI 是三个 workflow（`lint` / `build` / `release`），约定见
+**[`docs/agent/ci-release.md`](docs/agent/ci-release.md)**；
 GUI 的手动冒烟测试 `python tools/gui_smoke.py` 会真的去点窗口，不进 `cargo test`。
 
 ## 关键文档
 
-- [`docs/init-cefscan-rs.md`](docs/init-cefscan-rs.md) — 实施计划：架构 / 流水线 / CLI / GUI / 性能 / 测试 / CI
-- [`docs/schema.md`](docs/schema.md) — JSON 输出 schema 契约
+- [`docs/user-guide.md`](docs/user-guide.md) — 用户指南：CLI 用法与参数、GUI 三视图、后端、常见问题
+- [`docs/agent/`](docs/agent/) — 开发者文档：架构 / GUI / 测试 / 性能 / CI 与发布 / 决策记录
+- [`docs/schema.md`](docs/schema.md) — JSON / CSV / TOML 输出契约
 
 ## 许可证
 
