@@ -257,7 +257,7 @@ impl SignatureScanner {
 
 - rayon 并行 `dir_size`，worker 数上限 `min(size_threads, roots.len())`，参考实现用 `std::thread::scope` + `AtomicUsize` 取任务（`src/search.rs:202-238`），本项目直接换 rayon `par_iter` 更简洁。
 - **硬链接去重**：Linux/macOS 用 `(dev, ino)` 访问集（`src/search.rs:184-190`）；**Windows 需额外处理**——`WinSxS` 的硬链接会让总量虚高，M5 评估用 `GetFileInformationByHandle` 的 `nFileIndexHigh/Low` + `dwVolumeSerialNumber` 做去重（这是参考实现没有做、且确实存在的计量偏差）。
-- **总量语义要写进 README**：各 root 若有嵌套，"总占用"不等于各条之和。参考实现只做了粗糙的父子消解，本项目在 `ScanStats` 里同时给出 `total_bytes`（去重后的并集口径）与 `sum_bytes`（列表求和口径），避免用户困惑。
+- **总量语义要写进本文档**：各 root 若有嵌套，"总占用"不等于各条之和。参考实现只做了粗糙的父子消解，本项目在 `ScanStats` 里同时给出 `total_bytes`（去重后的并集口径）与 `sum_bytes`（列表求和口径），避免用户困惑。
 
 ### 阶段 5 — 运行进程检测（Windows）
 
@@ -848,8 +848,8 @@ declared"整体解析失败，表现只是"点了按钮没反应"）；② Pytho
 逐像素差分。这比看裸图的 PSNR 靠谱得多（见本节上面那张表的结论）。
 
 **端到端要另起一个**：`tools/gui_smoke.py`（手动，Windows）。它真的去点窗口，
-验证「Tauri command + Channel + 前端渲染」这条链，而不是只验编译得过。用法见
-README。改成三视图之后它也跟着重写了，几处要点：
+验证「Tauri command + Channel + 前端渲染」这条链，而不是只验编译得过。用法与
+三视图改造后的几处要点：
 
 - **必须硬性置顶**（`SetWindowPos(HWND_TOPMOST)`）。脚本抓的是**屏幕**，只调
   `SetForegroundWindow` 的话，Windows 允许前台进程拒绝让出前台权，从终端里跑
@@ -1208,7 +1208,7 @@ strip = true
 | **M2 签名扫描** | `signature.rs`、`inspect.rs`；签名表 + rank + 分块重叠 + magic 过滤 | 分块边界用例、跨块强签名用例、8 种 Mach-O magic 用例全绿（参考实现对应用例见 `src/search.rs:941-981`） |
 | **M3 分组计量 + CLI** | `group.rs`、`size.rs`、`process.rs`、`scan.rs`、CLI（table/json/csv/toml） | `cefscan --root <fixture> --format json` 输出符合 `docs/schema.md`；运行进程高亮在 Windows 实测有效；快照测试通过 |
 | **M4 Everything 后端** | `backend/everything.rs`、IPC 协议、超时、自动回落 | 装了 Everything 的机器上秒级出结果；未装/精简版时自动回落且不失败；`--verbose` 打印实际后端 |
-| **M5 性能专项** | rayon 并行签名扫描、预构建 Finder、热路径去分配、`cefscan benchmark`、benchmark.ps1 | 输出 mean/min/max + 峰值 RSS；与 M4 基线对比有可量化提升并写入 README |
+| **M5 性能专项** | rayon 并行签名扫描、预构建 Finder、热路径去分配、`cefscan benchmark`、benchmark.ps1 | 输出 mean/min/max + 峰值 RSS；与 M4 基线对比有可量化提升并写入本文档 §9 |
 | **M6 Tauri 2 GUI** | `cefscan-desktop`、React 前端、流式 Channel、虚拟列表、资源管理器定位 | 冷启动 < 1.5 s；扫描过程中列表渐进增长不卡 UI；点击能正确定位 |
 | **M7 发布工程** | Release workflow（已落地，见 §10.3）、NSIS 安装包、shell 补全、`docs/schema.md` 冻结、`completions/` | 三个通道都能产出可下载产物；版本号由提交数推导并注入二进制 |
 
@@ -1229,7 +1229,7 @@ push main 出 alpha、dispatch 选 alpha/beta/release，版本号由提交数推
 | --- | --- | --- |
 | Everything 未运行 / 精简版 / 1.5 alpha 实例差异 | 索引后端失效 | 多实例探测 + 双超时 + 强制回落；绝不因 IPC 失败终止扫描 |
 | 权限不足（访问被拒） | 遍历中断 | 所有 IO 错误在候选/计量层静默降级，`tracing::debug!` 记录，不冒泡 |
-| `WinSxS` 硬链接导致体积虚高 | 总数失真 | M5 用文件索引去重；README 明确 `total` 与 `sum` 两种口径 |
+| `WinSxS` 硬链接导致体积虚高 | 总数失真 | M5 用文件索引去重；本文档明确 `total` 与 `sum` 两种口径 |
 | 嵌套 root 重复计数 | 列表出现父子两条 | 分组阶段父子包含消解 + `ScanStats` 双口径 |
 | 签名误报（普通 Node 程序含 `napi_create_buffer`） | MiniElectron 误判 | 沿用参考实现的约束：Mini flavor **只扫可执行文件**，跳过 `.so/.dll`（`src/search.rs:568-572`） |
 | 分块边界漏检 | 漏报 | 64 B 重叠 + 专项单测 |
