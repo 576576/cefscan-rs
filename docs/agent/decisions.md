@@ -43,8 +43,8 @@
 - **不继承 3045 行的配置系统**。cefscan 只做扫描，配置面控制在 20 个键以内。
 - **不继承 egui 自绘 GUI**。改用 Tauri 2 + Web 前端，把渲染复杂度移出 Rust。
 - **不继承手写序列化器**。直接用 `serde_json` / `csv` / `toml`，换取正确性与 schema 稳定。
-- **不继承 `AppInfo.app_type: String`**。改用 `#[non_exhaustive] enum AppKind` +
-  `serde(rename_all = "snake_case")`，让输出 schema 可被机器安全消费。
+- **不继承 `AppInfo.app_type: String`**。改用 `enum AppKind` + `serde(rename_all = "snake_case")`，
+  让输出 schema 可被机器安全消费（`#[non_exhaustive]` 后来去掉了，理由见 §5）。
 - **不继承串行签名扫描**。参考实现是逐文件串行的，这是本项目最主要的提速空间。
 
 ## 2. 里程碑与进度
@@ -93,3 +93,43 @@ HTML/CSS/JS（理由见 [`gui.md`](gui.md) §1）；**M7 的发布链路已经�
 按主题拆成架构 / GUI / 性能 / 测试 / CI 与发布 / 决策六份文档（索引见
 [`README.md`](README.md)）。当初的单文件已随重构删除，其中的设计取舍与踩坑记录都保留在
 对应主题的文件里。
+
+## 5. 类型与 API 策略
+
+### 5.1 `#[non_exhaustive]` 统一不加
+
+`cefscan-core` 是 workspace 内部 crate：三个成员（core / cli / desktop）永远同版本一起发，
+`docs/schema.md` 冻结的是 **JSON 契约**而不是 Rust API。这种情况下 `#[non_exhaustive]`
+的收益（下游 `match` 能容忍新增变体）小于代价（下游被迫写 `_` 分支，新增变体时静默落进去
+而不是编译报错）。
+
+所以 `AppKind` / `ScanError` 上的 `#[non_exhaustive]` 已移除，其余公开类型本来就没有，
+现在是统一的"都不加"。**新增公开 enum / struct 时也不要加。**
+
+### 5.2 枚举的「取值名」只留一份真源
+
+`AppKind` 与 `Backend` 各自都有一个"线上取值"（JSON / CSV / `--kind` / `--backend` /
+GUI 请求字段用的字符串）。它有两到三个出口：
+
+| 出口 | 来源 |
+| --- | --- |
+| `label()` | 手写 `match`，是**唯一真源** |
+| serde 序列化 | `rename_all = "snake_case"` 派生 |
+| clap `ValueEnum` | 变体名派生（仅 `--backend`） |
+
+三份映射一旦分叉就是静默错配，所以每个出口都有测试钉住：
+
+- `model.rs::labels_match_the_serialized_form`：`serde_json::to_value(k) == k.label()`。
+- `cli.rs::backend_arg_names_match_backend_labels`：clap 取值名 == `Backend::label()`。
+- `output.rs::every_format_agrees_on_the_kind_label`：五种输出格式给出同一个 `kind`。
+
+**`CefSharp` 就是被这套测试抓出来的**：`rename_all = "snake_case"` 会把它拆成
+`cef_sharp`，与 `label()`、`docs/schema.md`、前端 `KIND_COLORS` 的 `cefsharp` 都不符，
+于是 JSON / NDJSON / TOML 里的 CefSharp 应用在 GUI 里掉成 unknown 的灰色。现在
+`CefSharp` 上有显式的 `#[serde(rename = "cefsharp")]`，**别改回派生**。
+
+### 5.3 `AppKind::ALL` / `Backend::ALL`
+
+`label` / `rank` 的穷尽 `match` 会在新增变体时让编译器报错，但漏改 `ALL` 编译器不会吭声
+（`--kind` 会静默认不出新类型、报错列表也不会列它）。`model.rs::all_lists_every_variant`
+用一个没有 `_` 分支的 `match` 补上这个洞。

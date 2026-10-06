@@ -106,17 +106,17 @@ cefscan-rs/
 
 ```rust
 // crates/cefscan-core/src/model.rs
-#[non_exhaustive]
 #[serde(rename_all = "snake_case")]
 pub enum AppKind {
     Electron, Edge, Chrome, Nwjs, CefSharp, MiniElectron, MiniBlink, Cef, Unknown,
 }
 
 impl AppKind {
+    /// 全部变体，按 rank 从强到弱。`--kind` 的解析与报错列表都由它生成。
+    pub const ALL: [Self; 9];
     /// 优先级，数值越大越强；用于同一目录多签名冲突时取最强者。
     pub const fn rank(self) -> u8;      // Electron 100 … Cef 60, Unknown 0
     pub const fn label(self) -> &'static str;  // 序列化值
-    pub fn strongest(self, other: Self) -> Self;
 }
 
 pub struct AppInfo {
@@ -129,7 +129,22 @@ pub struct AppInfo {
 }
 
 pub enum Backend { Auto, Index, Filesystem }
+
+impl Backend {
+    pub const ALL: [Self; 3];
+    pub const fn label(self) -> &'static str;          // auto / index / cefscan
+    pub fn from_label(label: &str) -> Option<Self>;
+}
 ```
+
+两点容易踩：
+
+- `AppKind` **故意不加 `#[non_exhaustive]`**（整个 workspace 同版本一起发，让下游 `match`
+  在新增变体时编译不过，而不是静默落进 `_`）。`ScanError` 同样。
+- `CefSharp` 的 serde 值**显式**写成 `cefsharp`：`rename_all = "snake_case"` 会把它拆成
+  `cef_sharp`，而 `label()`、`--kind`、前端 `KIND_COLORS` 和 `docs/schema.md` 用的都是
+  `cefsharp`。`model.rs` 的 `labels_match_the_serialized_form` 与 `output.rs` 的
+  `every_format_agrees_on_the_kind_label` 钉住这两侧一致。
 
 `ScanOptions` 的关键字段：
 
