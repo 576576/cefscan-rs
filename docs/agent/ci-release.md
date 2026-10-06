@@ -113,10 +113,13 @@ build.yml：matrix.include: ${{ fromJson(inputs.targets) }}
 |:--|:--|:--|:--|
 | Windows | x86_64 | MSVC | `cefscan-0.0.64-windows-x86_64.zip` |
 | Windows | x86_64 | gnullvm | `cefscan-0.0.64-windows-x86_64-gnullvm.zip` |
-| Linux | x86_64 | MSVC | `cefscan-0.0.64-linux-x86_64.zip` |
+| Linux | x86_64 | — | `cefscan-0.0.64-linux-x86_64.zip` |
 
-行序固定：平台 Windows → Linux，架构 x64 → arm64，工具链 MSVC → gnullvm。有 gnullvm
-产物时表下补一句 blockquote，说明那份多带一个 `WebView2Loader.dll`（原因见 §4）。
+- 行序固定：平台 Windows → Linux，架构 x64 → arm64，工具链 MSVC → gnullvm。
+- **「工具链」这一维只有 Windows 有**，Linux 填破折号 —— 它的 rust target 是
+  `{x86_64,aarch64}-unknown-linux-gnu`，没有第二个 ABI 可选。（这里踩过一次：
+  `case` 只判了 `*-gnullvm` 和 `else`，Linux 就落进 `else` 被标成 MSVC。）
+- 有 gnullvm 产物时表下补一句 blockquote，说明那份多带一个 `WebView2Loader.dll`（原因见 §4）。
 
 ## 3. 改 workflow 先本地校验
 

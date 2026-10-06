@@ -207,22 +207,22 @@ def main() -> int:
                  expect=("--title cefscan 0.0.64（alpha）", "--generate-notes", "--prerelease",
                          "| 平台 | 架构 | 工具链 | 下载 |",
                          f"| Windows | x86_64 | MSVC | [`cefscan-0.0.64-windows-x86_64.zip`]({url}/cefscan-0.0.64-windows-x86_64.zip) |",
-                         "| Linux | x86_64 | MSVC |"),
-                 forbid=("arm64", "gnullvm 版本额外附带"))
+                         "| Linux | x86_64 | — |"),
+                 forbid=("arm64", "gnullvm 版本额外附带", "Linux | x86_64 | MSVC"))
     publish_case("六种产物齐备（6 行 + gnullvm DLL 说明）", ALL_TARGETS,
                  VERSION_SAMPLE, "beta", "false",
                  expect=("| Windows | x86_64 | MSVC |", "| Windows | x86_64 | gnullvm |",
                          "| Windows | arm64 | MSVC |", "| Windows | arm64 | gnullvm |",
-                         "| Linux | x86_64 | MSVC |", "| Linux | arm64 | MSVC |",
+                         "| Linux | x86_64 | — |", "| Linux | arm64 | — |",
                          "> gnullvm 版本额外附带 `WebView2Loader.dll`", "--generate-notes"),
-                 forbid=("--prerelease",))
+                 forbid=("--prerelease", "Linux | x86_64 | MSVC", "Linux | arm64 | MSVC"))
     publish_case("手填说明在最前（\\n 还原）", ["windows-x86_64"], VERSION_SAMPLE, "release", "false",
                  notes="定向验证：只跑 windows x64\\n第二行说明",
                  expect=("定向验证：只跑 windows x64", "第二行说明", "--generate-notes"))
     publish_case("release 通道同 tag 已存在（先删后建）", ["linux-arm64"],
                  VERSION_SAMPLE, "release", "false", view_rc="0",
                  expect=(f"GH: release delete v{VERSION_SAMPLE} --yes --cleanup-tag",
-                         "| Linux | arm64 | MSVC |", "--generate-notes"))
+                         "| Linux | arm64 | — |", "--generate-notes"))
 
     # 顺序断言：手填说明必须排在架构矩阵之前（changelog 由 GitHub 追加在最后）。
     with tempfile.TemporaryDirectory(dir=TMP_ROOT) as tmp:

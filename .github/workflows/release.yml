@@ -202,7 +202,12 @@ jobs:
             [ -f "artifacts/$N" ] || continue
             case "$T" in windows-*) OS="Windows" ;; *) OS="Linux" ;; esac
             case "$T" in *-x86_64*) ARCH="x86_64" ;; *) ARCH="arm64" ;; esac
-            if [ "${T%-gnullvm}" != "$T" ]; then TC="gnullvm"; HAS_GNULLVM=1; else TC="MSVC"; fi
+            # 工具链只有 Windows 有这一维（Linux 是单一的 -gnu 目标），非 Windows 填破折号。
+            case "$T" in
+              *-gnullvm) TC="gnullvm"; HAS_GNULLVM=1 ;;
+              windows-*) TC="MSVC" ;;
+              *)         TC="—" ;;
+            esac
             ROWS="${ROWS}| ${OS} | ${ARCH} | ${TC} | [\`${N}\`](${REL_URL}/${N}) |"$'\n'
           done
           BODY="| 平台 | 架构 | 工具链 | 下载 |
