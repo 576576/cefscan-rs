@@ -98,6 +98,7 @@ pub fn normalize_windows_path(path: &Path) -> String {
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
+#[must_use]
 pub fn running_processes() -> HashSet<ProcessKey> {
     let mut processes = HashSet::new();
     let Ok(entries) = std::fs::read_dir("/proc") else {

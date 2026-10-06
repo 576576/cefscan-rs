@@ -499,11 +499,17 @@ mod tests {
         let stats = scan_streaming(
             &options_for(&fixture.root, Backend::Auto),
             |_| {},
-            |notice| *seen.lock().unwrap_or_else(|e| e.into_inner()) = Some(notice.backend),
+            |notice| {
+                *seen
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(notice.backend);
+            },
         )
         .unwrap();
 
-        let seen = seen.into_inner().unwrap_or_else(|e| e.into_inner());
+        let seen = seen
+            .into_inner()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         assert_eq!(seen, Some("cefscan"));
         assert_eq!(stats.backend, "cefscan");
         assert_eq!(stats.apps, 1);

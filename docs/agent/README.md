@@ -39,3 +39,5 @@ python tools/release_scripts_check.py     # release.yml 两段计算脚本真跑
   `src-tauri/src/lib.rs` 的 `scan_events_keep_their_wire_format` 钉死。
 - **`everything` 是 core 的默认 feature**，别设成可选（见 [`architecture.md`](architecture.md) §6）。
 - **平台相关的断言要门控**，否则 Linux CI 上必挂（见 [`testing.md`](testing.md) §3）。
+- **改了带平台 `cfg` 的代码、或开了新 lint 之后，clippy 要在 Linux 上也跑一遍** —— 本机
+  `cargo clippy` 只覆盖当前平台，Unix 专属代码根本不会进那次编译（见 [`testing.md`](testing.md) §3.4）。

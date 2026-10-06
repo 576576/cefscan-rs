@@ -54,6 +54,27 @@ CI 上跑了 115 秒、还一条断言都没有的。要测推导逻辑就直接
 `#[cfg(not(all(feature = "everything", target_os = "windows")))]` 门控，只有"没有索引
 服务可用"的平台才能断言。
 
+### 3.4 开了新 lint 之后，clippy 必须在 Linux 上也跑一遍
+
+`[workspace.lints.clippy]` 是全平台生效的，但**本机 `cargo clippy` 只覆盖当前平台**。
+`cargo clippy --workspace --all-targets -- -D warnings` 在 Windows 上绿**不代表** Linux 上绿：
+只在 Unix 上编译的代码（`#[cfg(any(target_os = "linux", ...))]`、
+`#[cfg(not(target_os = "windows"))]`）根本不会进那次编译。
+
+真跑 Linux CI 时踩到了 —— `process::running_processes` 少了 `#[must_use]`（整段是
+`#[cfg(linux/macos)]`），`scan.rs` 里 `#[cfg(not(windows))]` 的那个测试有两条
+`unwrap_or_else(|e| e.into_inner())`（`redundant_closure_for_method_calls`）。
+三个告警在 Windows 上一个都看不见，于是「本地 0 告警」通过了三轮才发现。
+
+规矩：**开新 lint、或改动任何带平台 `cfg` 的代码之后，本地补一条跨平台检查**：
+
+```bash
+cargo clippy -p cefscan-core -p cefscan-cli --all-targets --locked \
+  --target x86_64-unknown-linux-gnu -- -D warnings
+```
+
+`cefscan-desktop` 交叉不了（Tauri 要 webkit2gtk 的 pkg-config），那一份只能靠 CI。
+
 ## 4. 第一次真跑 CI 暴露出来的问题（值得留着）
 
 Linux 这一列此前**从来没跑过**，一次就翻出四类只在 Unix 上出现的问题：
