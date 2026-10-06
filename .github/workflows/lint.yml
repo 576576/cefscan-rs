@@ -1,6 +1,6 @@
 name: Lint
 
-# 质量门禁（图标 / 前端 / fmt / clippy / test）：只由 release.yml 调起，不跟 push/PR；设计与背景见 docs/init-cefscan-rs.md 的「CI」。
+# 质量门禁（图标 / 前端 / fmt / clippy / test）：只由 release.yml 调起，不跟 push/PR；设计与背景见 docs/agent/ci-release.md。
 on:
   workflow_call:
   workflow_dispatch:

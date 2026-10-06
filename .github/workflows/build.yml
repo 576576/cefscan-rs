@@ -1,6 +1,6 @@
 name: Build
 
-# 可复用构建工作流：只负责把包做出来，不碰发布。版本号由 release.yml 的 prep job 推导一次后传进来，别在这里再推导一遍。
+# 可复用构建工作流：只负责把包做出来，不碰发布。版本号与目标矩阵由 release.yml 的 prep job 推导一次后传进来，别在这里再推导一遍。
 on:
   workflow_call:
     inputs:
@@ -12,32 +12,34 @@ on:
         description: alpha / beta / release，只用于产物标注
         required: true
         type: string
+      targets:
+        description: 构建矩阵 include 数组（JSON 字符串，元素含 target/os/rust_target/exe；空数组表示不出包）
+        required: true
+        type: string
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
   build:
-    name: build (${{ matrix.name }})
+    name: build (${{ matrix.target }})
+    # 空矩阵会让 Actions 直接报错，所以空数组时显式跳过。
+    if: inputs.targets != '[]'
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - name: windows-x86_64
-            os: windows-latest
-            exe: ".exe"
-          - name: linux-x86_64
-            os: ubuntu-latest
-            exe: ""
+        include: ${{ fromJson(inputs.targets) }}
     steps:
       - uses: actions/checkout@v7
       - name: 安装 Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_target }}
       - name: 缓存 cargo 与 target
         uses: Swatinem/rust-cache@v2
         with:
-          key: build-${{ matrix.name }}
+          key: build-${{ matrix.target }}
       - name: 安装 Linux 系统依赖
         if: runner.os == 'Linux'
         run: |
@@ -46,27 +48,55 @@ jobs:
             libwebkit2gtk-4.1-dev \
             librsvg2-dev \
             zip
+      # gnullvm 的默认 linker 就是 llvm-mingw 的 <triple>-clang（rustc 的 target spec 里写死的），runner 上的 MSVC 工具链在这个 target 下用不上。
+      - name: 安装 llvm-mingw（gnullvm）
+        if: contains(matrix.rust_target, 'gnullvm')
+        shell: bash
+        run: |
+          set -euo pipefail
+          V="20260922"
+          DIR="llvm-mingw-${V}-ucrt-x86_64"
+          # 版本写死：这套工具链只提供 linker 与 mingw 库，浮动起来只会让产物不可复现。
+          curl -fsSL --retry 3 -o llvm-mingw.zip \
+            "https://github.com/mstorsjo/llvm-mingw/releases/download/${V}/${DIR}.zip"
+          # Windows runner 的 Git for Windows 没有 unzip，改走 python3 的 zipfile。
+          python3 -c "import sys,zipfile; zipfile.ZipFile(sys.argv[1]).extractall('.')" llvm-mingw.zip
+          rm -f llvm-mingw.zip
+          test -x "$DIR/bin/x86_64-w64-mingw32-clang.exe" || { echo "::error::llvm-mingw 解压异常（缺 $DIR/bin）"; exit 1; }
+          # 交给 cargo / cc 找 <triple>-clang 与 llvm-ar；路径给 Windows 形式，GITHUB_PATH 的条目会进原生进程的 PATH。
+          echo "$(pwd -W)/$DIR/bin" >> "$GITHUB_PATH"
       # CEFSCAN_BUILD_VERSION 是编译期注入的版本号（cli.rs 用 option_env! 读）；不设时回落到 Cargo.toml 的版本，本地构建不受影响。
       - name: 构建 release
         env:
           CEFSCAN_BUILD_VERSION: ${{ inputs.version }}
-        run: cargo build --release --locked --workspace
+        run: cargo build --release --locked --workspace --target ${{ matrix.rust_target }}
       # 先收进一个以"版本+平台"命名的目录再打包，解开就是一个自包含目录（两个 exe 与 README/LICENSE 同级）。
       - name: 收集产物
         shell: bash
         run: |
           set -euo pipefail
-          NAME="cefscan-${{ inputs.version }}-${{ matrix.name }}"
+          NAME="cefscan-${{ inputs.version }}-${{ matrix.target }}"
           mkdir -p "dist/$NAME"
-          cp "target/release/cefscan${{ matrix.exe }}" "dist/$NAME/"
-          cp "target/release/cefscanw${{ matrix.exe }}" "dist/$NAME/"
+          cp "target/${{ matrix.rust_target }}/release/cefscan${{ matrix.exe }}" "dist/$NAME/"
+          cp "target/${{ matrix.rust_target }}/release/cefscanw${{ matrix.exe }}" "dist/$NAME/"
           cp README.md LICENSE "dist/$NAME/"
+      # gnullvm 下 cefscanw 动态链 WebView2Loader.dll（msvc 那份静态链 WebView2LoaderStatic），缺它 GUI 起不来。
+      - name: 补 WebView2Loader.dll（gnullvm）
+        if: contains(matrix.rust_target, 'gnullvm')
+        shell: bash
+        run: |
+          set -euo pipefail
+          NAME="cefscan-${{ inputs.version }}-${{ matrix.target }}"
+          ARCH="x64"; case "${{ matrix.rust_target }}" in aarch64-*) ARCH="arm64" ;; esac
+          SRC="$(ls -1 "${CARGO_HOME:-$HOME/.cargo}"/registry/src/*/webview2-com-sys-*/"$ARCH"/WebView2Loader.dll | head -1)"
+          [ -n "$SRC" ] || { echo "::error::找不到 WebView2Loader.dll（$ARCH）"; exit 1; }
+          cp "$SRC" "dist/$NAME/"
       # 产物能跑起来才算构建成功（cefscanw 是 GUI，不在 CI 里启动）；顺带核对注入的版本号真的生效了。
       - name: 冒烟检查
         shell: bash
         run: |
           set -euo pipefail
-          BIN="dist/cefscan-${{ inputs.version }}-${{ matrix.name }}/cefscan${{ matrix.exe }}"
+          BIN="dist/cefscan-${{ inputs.version }}-${{ matrix.target }}/cefscan${{ matrix.exe }}"
           "$BIN" --version
           "$BIN" --help > /dev/null
           "$BIN" --version | grep -qF "${{ inputs.version }}"
@@ -74,19 +104,19 @@ jobs:
       - name: 打包（Windows）
         if: runner.os == 'Windows'
         shell: pwsh
-        run: Compress-Archive -Path "dist/cefscan-${{ inputs.version }}-${{ matrix.name }}" -DestinationPath "dist/cefscan-${{ inputs.version }}-${{ matrix.name }}.zip"
+        run: Compress-Archive -Path "dist/cefscan-${{ inputs.version }}-${{ matrix.target }}" -DestinationPath "dist/cefscan-${{ inputs.version }}-${{ matrix.target }}.zip"
       # Linux 侧的 zip 已随系统依赖装好；-q 少输出、-r 递归。
       - name: 打包（Linux）
         if: runner.os == 'Linux'
         shell: bash
         run: |
           set -euo pipefail
-          NAME="cefscan-${{ inputs.version }}-${{ matrix.name }}"
+          NAME="cefscan-${{ inputs.version }}-${{ matrix.target }}"
           (cd dist && zip -qr "$NAME.zip" "$NAME")
       - name: 上传产物
         uses: actions/upload-artifact@v7
         with:
-          name: cefscan-${{ inputs.version }}-${{ matrix.name }}
-          path: dist/cefscan-${{ inputs.version }}-${{ matrix.name }}.zip
+          name: cefscan-${{ inputs.version }}-${{ matrix.target }}
+          path: dist/cefscan-${{ inputs.version }}-${{ matrix.target }}.zip
           if-no-files-found: error
           retention-days: 30
