@@ -14,8 +14,12 @@ pub struct DirInspection {
     pub evidence: Option<&'static str>,
 }
 
-/// 检查单个目录。
-pub fn inspect_directory(dir: &Path, flavor: Flavor, scanner: &SignatureScanner) -> DirInspection {
+/// 检查单个目录。`scanner` 由调用方按任务持有并复用（含内部缓冲）。
+pub fn inspect_directory(
+    dir: &Path,
+    flavor: Flavor,
+    scanner: &mut SignatureScanner,
+) -> DirInspection {
     let Ok(entries) = fs::read_dir(dir) else {
         return DirInspection::default();
     };

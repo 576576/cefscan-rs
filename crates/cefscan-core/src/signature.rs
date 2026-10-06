@@ -26,10 +26,14 @@ struct Rule {
 }
 
 /// 预构建 `memmem::Finder` 的扫描器。
+///
+/// 内含一个可复用的读取缓冲：全盘扫描时每个候选文件都会走一遍 [`scan_read`]，
+/// 若每次重新分配，就是「文件数 × 1 MiB」的 alloc + memset。
 #[derive(Clone)]
 pub struct SignatureScanner {
     standard: Vec<Rule>,
     mini: Vec<Rule>,
+    buffer: Vec<u8>,
 }
 
 impl Default for SignatureScanner {
@@ -52,12 +56,17 @@ impl SignatureScanner {
                 (AppKind::MiniElectron, "napi_create_buffer"),
                 (AppKind::MiniBlink, "miniblink"),
             ]),
+            buffer: Vec::new(),
         }
     }
 
-    /// 扫描任意 `Read`。
+    /// 扫描任意 `Read`。缓冲区随扫描器复用，首次调用后才分配。
+    ///
+    /// # Errors
+    ///
+    /// 读取出错时原样返回；调用方（目录检查）会把它当作「这个文件没查到」跳过。
     pub fn scan_read<R: Read>(
-        &self,
+        &mut self,
         reader: &mut R,
         flavor: Flavor,
     ) -> io::Result<Option<(AppKind, &'static str)>> {
@@ -66,7 +75,11 @@ impl SignatureScanner {
             Flavor::Mini => &self.mini,
         };
 
-        let mut buffer = vec![0_u8; CHUNK_SIZE + OVERLAP];
+        if self.buffer.len() < CHUNK_SIZE + OVERLAP {
+            self.buffer.resize(CHUNK_SIZE + OVERLAP, 0);
+        }
+        let buffer: &mut [u8] = &mut self.buffer;
+
         let mut retained = 0_usize;
         let mut best: Option<(AppKind, &'static str)> = None;
 
@@ -97,8 +110,12 @@ impl SignatureScanner {
     }
 
     /// 扫描一个文件。不是 ELF / PE / Mach-O 就直接跳过。
+    ///
+    /// # Errors
+    ///
+    /// 打开或读取失败时返回错误；调用方会跳过该文件。
     pub fn scan_file(
-        &self,
+        &mut self,
         path: &Path,
         flavor: Flavor,
     ) -> io::Result<Option<(AppKind, &'static str)>> {
@@ -215,9 +232,33 @@ mod tests {
         assert_eq!(standard(&bytes), Some(AppKind::Nwjs));
     }
 
+    /// 缓冲复用后连续扫描仍然正确：大缓冲里残留的上一次内容不能被误判。
     #[test]
-    fn non_executable_bytes_are_rejected() {
-        assert!(!is_executable_magic(b"#!"));
+    fn the_scanner_can_be_reused_across_inputs() {
+        let mut scanner = SignatureScanner::new();
+
+        let mut big = vec![0_u8; CHUNK_SIZE + 128];
+        big[CHUNK_SIZE..CHUNK_SIZE + 8].copy_from_slice(b"url-nwjs");
+        assert_eq!(
+            scanner
+                .scan_read(&mut Cursor::new(big), Flavor::Standard)
+                .unwrap()
+                .map(|(kind, _)| kind),
+            Some(AppKind::Nwjs)
+        );
+
+        assert_eq!(
+            scanner
+                .scan_read(&mut Cursor::new(b"nothing here".to_vec()), Flavor::Standard)
+                .unwrap()
+                .map(|(kind, _)| kind),
+            None,
+            "复用的缓冲不该把上一次的命中带过来"
+        );
+    }
+
+    #[test]
+    fn non_executable_bytes_are_rejected() {        assert!(!is_executable_magic(b"#!"));
         assert!(!is_executable_magic(b""));
         assert!(!is_executable_magic(&[0x7f]));
         assert!(is_executable_magic(b"MZ\x90\x00"));

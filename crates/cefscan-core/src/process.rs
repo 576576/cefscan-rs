@@ -53,20 +53,23 @@ pub fn running_processes() -> HashSet<ProcessKey> {
         return processes;
     }
 
+    // 路径缓冲只分配一次：进程数以百计，逐进程 `vec![0; 64 KiB]` 是几十 MB 的无谓开销。
+    let mut path_buffer = vec![0_u16; 32_768];
+
     loop {
         // SAFETY: OpenProcess 借用进程号；句柄非空时由 OwnedHandle 关闭。
         let process =
             unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, entry.th32ProcessID) };
         if !process.is_null() {
             let process = OwnedHandle(process);
-            let mut buffer = vec![0_u16; 32_768];
-            let mut length = buffer.len() as u32;
-            // SAFETY: buffer 可写 length 个 UTF-16 单元；受保护进程会失败，忽略即可。
-            if unsafe { QueryFullProcessImageNameW(process.0, 0, buffer.as_mut_ptr(), &mut length) }
-                != 0
+            let mut length = path_buffer.len() as u32;
+            // SAFETY: path_buffer 可写 length 个 UTF-16 单元；受保护进程会失败，忽略即可。
+            if unsafe {
+                QueryFullProcessImageNameW(process.0, 0, path_buffer.as_mut_ptr(), &mut length)
+            } != 0
             {
                 let path =
-                    std::path::PathBuf::from(OsString::from_wide(&buffer[..length as usize]));
+                    std::path::PathBuf::from(OsString::from_wide(&path_buffer[..length as usize]));
                 processes.insert(normalize_windows_path(&path));
             }
         }
