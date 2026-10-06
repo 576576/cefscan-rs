@@ -181,8 +181,7 @@ pub fn parse_size(raw: &str) -> Result<u64, String> {
         .parse()
         .map_err(|_| format!("invalid size `{raw}`"))?;
     let multiplier = match unit.trim().to_ascii_lowercase().as_str() {
-        "" => 1.0,
-        "b" => 1.0,
+        "" | "b" => 1.0,
         "k" | "kb" | "kib" => 1024.0,
         "m" | "mb" | "mib" => 1024.0 * 1024.0,
         "g" | "gb" | "gib" => 1024.0 * 1024.0 * 1024.0,

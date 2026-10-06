@@ -25,6 +25,7 @@ pub enum ScanError {
 }
 
 impl ScanError {
+    #[must_use]
     pub fn io(path: PathBuf, source: io::Error) -> Self {
         Self::Io { path, source }
     }

@@ -12,6 +12,7 @@ use crate::model::CandidateKind;
 ///
 /// 在 Windows / macOS 上按 ASCII 小写比较（文件系统大小写不敏感），
 /// 在 Linux 上大小写敏感。
+#[must_use]
 pub fn classify_candidate_name(name: &OsStr) -> Option<CandidateKind> {
     #[cfg(any(target_os = "windows", target_os = "macos"))]
     let lowered: Cow<'_, OsStr> = match name.to_str() {

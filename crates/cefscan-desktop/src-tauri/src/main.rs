@@ -2,5 +2,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    cefscanw_lib::run()
+    cefscanw_lib::run();
 }

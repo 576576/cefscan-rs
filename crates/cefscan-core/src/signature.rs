@@ -11,7 +11,7 @@ pub const CHUNK_SIZE: usize = 1024 * 1024;
 /// 块之间的重叠字节数。
 pub const OVERLAP: usize = 64;
 
-/// 扫描风味。Mini 分支用于从 `libnode` 线索里区分 MiniElectron / MiniBlink。
+/// 扫描风味。Mini 分支用于从 `libnode` 线索里区分 `MiniElectron` / `MiniBlink`。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Flavor {
     Standard,
@@ -43,6 +43,7 @@ impl Default for SignatureScanner {
 }
 
 impl SignatureScanner {
+    #[must_use]
     pub fn new() -> Self {
         Self {
             standard: rules(&[
@@ -156,6 +157,7 @@ fn strongest_in_chunk(chunk: &[u8], rules: &[Rule]) -> Option<(AppKind, &'static
 }
 
 /// ELF / PE / Mach-O 的 magic 检查。
+#[must_use]
 pub fn is_executable_magic(bytes: &[u8]) -> bool {
     if bytes.len() < 2 {
         return false;
@@ -258,7 +260,8 @@ mod tests {
     }
 
     #[test]
-    fn non_executable_bytes_are_rejected() {        assert!(!is_executable_magic(b"#!"));
+    fn non_executable_bytes_are_rejected() {
+        assert!(!is_executable_magic(b"#!"));
         assert!(!is_executable_magic(b""));
         assert!(!is_executable_magic(&[0x7f]));
         assert!(is_executable_magic(b"MZ\x90\x00"));

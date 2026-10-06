@@ -35,3 +35,6 @@ windows-sys = { version = "0.61", features = [
 # 免得给 Linux/macOS 构建平白多编两个 crate。
 png = "0.18"
 base64 = "0.22"
+
+[lints]
+workspace = true

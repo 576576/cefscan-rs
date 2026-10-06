@@ -10,6 +10,7 @@ pub type ProcessKey = String;
 pub type ProcessKey = std::path::PathBuf;
 
 #[cfg(target_os = "windows")]
+#[must_use]
 pub fn running_processes() -> HashSet<ProcessKey> {
     use std::ffi::OsString;
     use std::mem::size_of;
@@ -49,7 +50,7 @@ pub fn running_processes() -> HashSet<ProcessKey> {
     let mut processes = HashSet::new();
 
     // SAFETY: entry 已填好 dwSize，且在枚举期间保持有效。
-    if unsafe { Process32FirstW(snapshot.0, &mut entry) } == 0 {
+    if unsafe { Process32FirstW(snapshot.0, &raw mut entry) } == 0 {
         return processes;
     }
 
@@ -65,7 +66,7 @@ pub fn running_processes() -> HashSet<ProcessKey> {
             let mut length = path_buffer.len() as u32;
             // SAFETY: path_buffer 可写 length 个 UTF-16 单元；受保护进程会失败，忽略即可。
             if unsafe {
-                QueryFullProcessImageNameW(process.0, 0, path_buffer.as_mut_ptr(), &mut length)
+                QueryFullProcessImageNameW(process.0, 0, path_buffer.as_mut_ptr(), &raw mut length)
             } != 0
             {
                 let path =
@@ -75,7 +76,7 @@ pub fn running_processes() -> HashSet<ProcessKey> {
         }
 
         // SAFETY: entry 仍带正确的 dwSize。
-        if unsafe { Process32NextW(snapshot.0, &mut entry) } == 0 {
+        if unsafe { Process32NextW(snapshot.0, &raw mut entry) } == 0 {
             break;
         }
     }
@@ -85,6 +86,7 @@ pub fn running_processes() -> HashSet<ProcessKey> {
 
 /// `\\?\UNC\Server\Share\x` → `\\server\share\x`；`\\?\C:\a/b.exe` → `c:\a\b.exe`。
 #[cfg(target_os = "windows")]
+#[must_use]
 pub fn normalize_windows_path(path: &Path) -> String {
     let text = path.to_string_lossy().replace('/', "\\");
     if text.len() >= 8 && text[..8].eq_ignore_ascii_case(r"\\?\UNC\") {
@@ -116,11 +118,10 @@ pub fn running_processes() -> HashSet<ProcessKey> {
 }
 
 /// 判断某个可执行文件是否正在运行。
+#[must_use]
 pub fn is_running(processes: &HashSet<ProcessKey>, path: &Path) -> bool {
     is_running_key(processes, path)
-        || std::fs::canonicalize(path)
-            .map(|canonical| is_running_key(processes, &canonical))
-            .unwrap_or(false)
+        || std::fs::canonicalize(path).is_ok_and(|canonical| is_running_key(processes, &canonical))
 }
 
 #[cfg(target_os = "windows")]

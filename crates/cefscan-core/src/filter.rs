@@ -38,6 +38,7 @@ pub struct Filter {
 }
 
 impl Filter {
+    #[must_use]
     pub fn new(options: &ScanOptions) -> Self {
         Self {
             roots: options.roots.clone(),
@@ -49,6 +50,7 @@ impl Filter {
     }
 
     /// 一个路径（目录**或文件**）是否通过全部规则。
+    #[must_use]
     pub fn allows_path(&self, path: &Path) -> bool {
         if !self.in_roots(path) {
             return false;
@@ -79,6 +81,7 @@ impl Filter {
     }
 
     /// 一个目录是否值得进入。返回 `false` 时整棵子树都被跳过。
+    #[must_use]
     pub fn allows_dir(&self, path: &Path) -> bool {
         self.allows_path(path)
     }
@@ -87,7 +90,10 @@ impl Filter {
     ///
     /// 两个平台的规则形状不同：Windows 是「按目录名」，命中任何一层都排除；
     /// Unix 是「按根」，只在路径落在这些根之下时排除。
+    ///
+    /// Windows 那份不用 `self`，但两边必须共用同一个方法签名，调用点才不必 `cfg` 分叉。
     #[cfg(target_os = "windows")]
+    #[allow(clippy::unused_self)]
     fn is_platform_excluded(&self, path: &Path) -> bool {
         path.components().any(|component| {
             component.as_os_str().to_str().is_some_and(|name| {
@@ -114,9 +120,8 @@ impl Filter {
     }
 
     fn is_excluded_dir_name(&self, name: &OsStr) -> bool {
-        let text = match name.to_str() {
-            Some(text) => text,
-            None => return false,
+        let Some(text) = name.to_str() else {
+            return false;
         };
         self.exclude_dir_names
             .iter()
@@ -124,6 +129,7 @@ impl Filter {
     }
 
     /// 记录里是否跟随符号链接。
+    #[must_use]
     pub fn follow_symlinks(&self) -> bool {
         self.follow_symlinks
     }
@@ -144,6 +150,7 @@ fn is_trash_dir(name: &OsStr) -> bool {
 }
 
 /// 大小写不敏感、且以目录边界为准的前缀判断。
+#[must_use]
 pub fn path_starts_with(path: &Path, root: &Path) -> bool {
     let path = path.as_os_str().as_encoded_bytes();
     let root = root.as_os_str().as_encoded_bytes();
@@ -155,7 +162,7 @@ pub fn path_starts_with(path: &Path, root: &Path) -> bool {
             return false;
         }
     }
-    if matches!(root.last(), Some(b'/') | Some(b'\\')) {
+    if matches!(root.last(), Some(b'/' | b'\\')) {
         return true;
     }
     path.get(root.len())
@@ -183,6 +190,7 @@ fn excluded_root_hit(path: &str, excluded_root: &str, explicit_roots: &[PathBuf]
 }
 
 /// 允许在测试里复用的去重集合。
+#[must_use]
 pub fn dir_name_set(names: &[String]) -> HashSet<String> {
     names.iter().map(|n| n.to_ascii_lowercase()).collect()
 }
@@ -195,7 +203,10 @@ mod tests {
     fn filter_with(roots: Vec<PathBuf>, exclude: &[&str]) -> Filter {
         Filter::new(&ScanOptions {
             roots,
-            exclude_dir_names: exclude.iter().map(|s| s.to_string()).collect(),
+            exclude_dir_names: exclude
+                .iter()
+                .map(std::string::ToString::to_string)
+                .collect(),
             ..ScanOptions::default()
         })
     }

@@ -109,7 +109,7 @@ pub fn display_name(path: &Path) -> String {
     }
 }
 
-/// 去掉 WindowsApps 那种包目录名的后缀：
+/// 去掉 `WindowsApps` 那种包目录名的后缀：
 /// `Crystalnix.Termius_10.1.0.0_x64__0m0t0j9spf6x8` → `Crystalnix.Termius`。
 fn strip_package_suffix(name: &str) -> &str {
     let bytes = name.as_bytes();

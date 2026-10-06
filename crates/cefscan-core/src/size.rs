@@ -13,6 +13,7 @@ struct FileId {
 }
 
 /// 累加一个目录树下的文件大小。
+#[must_use]
 pub fn dir_size(path: &Path) -> u64 {
     let mut total = 0_u64;
     let mut pending = vec![path.to_path_buf()];
@@ -88,6 +89,7 @@ where
 }
 
 /// 并行统计一批目录，按输入顺序返回大小。
+#[must_use]
 pub fn sizes_parallel(paths: &[PathBuf], threads: usize) -> Vec<u64> {
     let sizes = std::sync::Mutex::new(vec![0_u64; paths.len()]);
     sizes_parallel_each(paths, threads, |index, _, size| {
@@ -95,7 +97,7 @@ pub fn sizes_parallel(paths: &[PathBuf], threads: usize) -> Vec<u64> {
     });
     sizes
         .into_inner()
-        .unwrap_or_else(|error| error.into_inner())
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 #[cfg(test)]

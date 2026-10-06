@@ -293,7 +293,6 @@ dependencies = [
 name = "cefscan-cli"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "cefscan-core",
  "clap",
  "csv",

@@ -68,7 +68,9 @@ mod imp {
     /// 取图标的 RGBA 像素。**必须串行调用。**
     fn capture(path: &Path) -> Option<(Vec<u8>, u32)> {
         static LOCK: Mutex<()> = Mutex::new(());
-        let _guard = LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let _guard = LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
 
         let hicon = icon_handle(path)?;
         let pixels = render(hicon);
@@ -89,7 +91,7 @@ mod imp {
             SHGetFileInfoW(
                 wide.as_ptr(),
                 0,
-                &mut info,
+                &raw mut info,
                 size_of::<SHFILEINFOW>() as u32,
                 SHGFI_ICON | SHGFI_LARGEICON,
             )
@@ -104,7 +106,7 @@ mod imp {
     fn render(hicon: HICON) -> Option<(Vec<u8>, u32)> {
         let mut info: ICONINFO = unsafe { zeroed() };
         // SAFETY: hicon 有效；info 是栈上可写结构。
-        if unsafe { GetIconInfo(hicon, &mut info) } == 0 {
+        if unsafe { GetIconInfo(hicon, &raw mut info) } == 0 {
             return None;
         }
         // GetIconInfo 会复制出两张 GDI 位图，必须自己删。
@@ -136,7 +138,7 @@ mod imp {
             GetObjectW(
                 probe,
                 size_of::<BITMAP>() as i32,
-                &mut bitmap as *mut BITMAP as *mut c_void,
+                (&raw mut bitmap).cast::<c_void>(),
             )
         };
         if ok == 0 || bitmap.bmWidth <= 0 {
@@ -223,8 +225,8 @@ mod imp {
                 bitmap,
                 0,
                 side as u32,
-                buffer.as_mut_ptr() as *mut c_void,
-                &mut info,
+                buffer.as_mut_ptr().cast::<c_void>(),
+                &raw mut info,
                 DIB_RGB_COLORS,
             )
         };

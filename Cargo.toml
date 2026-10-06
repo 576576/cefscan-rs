@@ -19,7 +19,6 @@ cefscan-core = { path = "crates/cefscan-core" }
 rayon = "1.10"
 memchr = "2.7"
 thiserror = "2"
-anyhow = "1"
 clap = { version = "4", default-features = false, features = [
     "derive",
     "std",
@@ -32,6 +31,26 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 csv = "1"
 toml = "0.8"
+
+# CI 只跑默认 lint 组，`clippy::pedantic` 那一堆长期静默存在。这里显式打开
+# 值得守住的子集，让新增代码当场被拦住。噪声大的几条**故意不启用**：
+# - `doc_markdown`：clap 的字段文档就是 `--help` 文本，加反引号会原样显示给用户；
+# - `cast_*`：Win32 互操作里 `usize`/`u32`/`i32` 互转不可避免；
+# - `struct_excessive_bools`：clap 的 `Cli` 天生一堆开关，拆开反而更难读；
+# - `missing_panics_doc`：本项目的惯例是只写 `# Errors`。
+[workspace.lints.clippy]
+borrow_as_ptr = "warn"
+case_sensitive_file_extension_comparisons = "warn"
+manual_let_else = "warn"
+map_unwrap_or = "warn"
+match_same_arms = "warn"
+missing_errors_doc = "warn"
+must_use_candidate = "warn"
+ptr_as_ptr = "warn"
+redundant_closure_for_method_calls = "warn"
+unnested_or_patterns = "warn"
+unused_self = "warn"
+used_underscore_binding = "warn"
 
 [profile.release]
 opt-level = 3

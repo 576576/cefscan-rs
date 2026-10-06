@@ -23,6 +23,11 @@ pub struct WalkResult {
 }
 
 /// 遍历入口。
+///
+/// # Errors
+///
+/// 没有任何可遍历的根时返回 [`ScanError::NoRoots`]；解析根目录失败时返回
+/// [`ScanError::Io`]。单个目录没权限只会跳过，不会中断遍历。
 pub fn walk(options: &ScanOptions) -> Result<WalkResult, ScanError> {
     let filter = Arc::new(Filter::new(options));
     let roots = resolve_roots(options)?;
@@ -40,7 +45,10 @@ pub fn walk(options: &ScanOptions) -> Result<WalkResult, ScanError> {
     });
     // 初始 pending = 根目录数量
     {
-        let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
+        let mut state = shared
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         state.pending = state.queue.len();
     }
 
@@ -73,7 +81,10 @@ pub fn walk(options: &ScanOptions) -> Result<WalkResult, ScanError> {
         });
     }
 
-    let mut candidates = results.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    let mut candidates = results
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone();
     candidates.sort_by(|a, b| a.path.cmp(&b.path));
     Ok(WalkResult {
         candidates,
@@ -85,7 +96,9 @@ fn push_results(results: &Mutex<Vec<Candidate>>, local: Vec<Candidate>) {
     if local.is_empty() {
         return;
     }
-    let mut guard = results.lock().unwrap_or_else(|e| e.into_inner());
+    let mut guard = results
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     guard.extend(local);
 }
 
@@ -106,7 +119,10 @@ fn worker_loop(
     local: &mut Vec<Candidate>,
     dirs_scanned: &AtomicU64,
 ) {
-    let mut guard = shared.state.lock().unwrap_or_else(|e| e.into_inner());
+    let mut guard = shared
+        .state
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     loop {
         let next = guard.queue.pop_front();
         if let Some(dir) = next {
@@ -115,7 +131,10 @@ fn worker_loop(
             let subdirs = scan_dir(&dir, filter, local);
             dirs_scanned.fetch_add(1, Ordering::Relaxed);
 
-            guard = shared.state.lock().unwrap_or_else(|e| e.into_inner());
+            guard = shared
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             if !subdirs.is_empty() {
                 guard.pending += subdirs.len();
                 guard.queue.extend(subdirs);
@@ -134,7 +153,7 @@ fn worker_loop(
         guard = shared
             .cvar
             .wait_timeout(guard, std::time::Duration::from_millis(1))
-            .unwrap_or_else(|e| e.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .0;
     }
 }
@@ -190,8 +209,7 @@ fn resolve_threads(configured: usize) -> usize {
         return configured;
     }
     std::thread::available_parallelism()
-        .map(|n| n.get())
-        .unwrap_or(2)
+        .map_or(2, std::num::NonZero::get)
         .min(DEFAULT_MAX_THREADS)
 }
 
@@ -265,8 +283,7 @@ mod tests {
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_nanos())
-                .unwrap_or(0)
+                .map_or(0, |d| d.as_nanos())
         ));
         fs::create_dir_all(&root).unwrap();
         Fixture { root }

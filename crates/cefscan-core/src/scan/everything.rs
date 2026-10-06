@@ -78,7 +78,7 @@ pub fn query_candidates(options: &ScanOptions) -> io::Result<(Vec<Candidate>, &'
             reply_window.everything,
             WM_COPYDATA,
             0,
-            &mut copy_data as *mut _ as LPARAM,
+            &raw mut copy_data as LPARAM,
             SMTO_ABORTIFHUNG,
             timeout.as_millis() as u32,
             ptr::null_mut(),
@@ -95,7 +95,7 @@ pub fn query_candidates(options: &ScanOptions) -> io::Result<(Vec<Candidate>, &'
 
     let bytes = reply
         .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
         .clone()
         .ok_or_else(|| io::Error::new(io::ErrorKind::TimedOut, "Everything did not reply"))?;
 
@@ -104,18 +104,11 @@ pub fn query_candidates(options: &ScanOptions) -> io::Result<(Vec<Candidate>, &'
     let filter = Filter::new(options);
     let mut candidates = Vec::with_capacity(items.len().min(1024));
     for item in items {
-        let Some(name) = item.file_name else { continue };
-        let Some(kind) = classify_candidate_name(&name) else {
+        let Some(kind) = classify_candidate_name(&item.file_name) else {
             continue;
         };
-        let path = match item.path {
-            Some(directory) => {
-                let mut full = directory;
-                full.push(&name);
-                full
-            }
-            None => PathBuf::from(OsString::from_wide(&to_wide(&name.to_string_lossy()))),
-        };
+        let mut path = item.path;
+        path.push(&item.file_name);
         // 先过规则再碰磁盘：被排除的路径连 `is_file()` 都不做。
         if !filter.allows_path(&path) {
             continue;
@@ -143,9 +136,11 @@ fn encode_query(reply_window: u32, reply_id: u32, search: &str) -> Vec<u8> {
     bytes
 }
 
+/// 一条回复项。两处字符串都**必须**存在：偏移非法或没读到 NUL 都会让 `parse_reply` 报错，
+/// 所以这里不用 `Option` 假装"可能缺失"。
 struct ReplyItem {
-    file_name: Option<OsString>,
-    path: Option<PathBuf>,
+    file_name: OsString,
+    path: PathBuf,
 }
 
 fn parse_reply(bytes: &[u8]) -> io::Result<Vec<ReplyItem>> {
@@ -179,13 +174,12 @@ fn parse_reply(bytes: &[u8]) -> io::Result<Vec<ReplyItem>> {
         let file_name_offset = read_u32(bytes, offset + size_of::<u32>())?;
         let path_offset = read_u32(bytes, offset + 2 * size_of::<u32>())?;
         items.push(ReplyItem {
-            file_name: read_utf16_z(bytes, file_name_offset, data_start)?
-                .as_deref()
-                .map(OsString::from_wide),
-            path: read_utf16_z(bytes, path_offset, data_start)?
-                .as_deref()
-                .map(OsString::from_wide)
-                .map(PathBuf::from),
+            file_name: OsString::from_wide(&read_utf16_z(bytes, file_name_offset, data_start)?),
+            path: PathBuf::from(OsString::from_wide(&read_utf16_z(
+                bytes,
+                path_offset,
+                data_start,
+            )?)),
         });
     }
     Ok(items)
@@ -195,10 +189,17 @@ fn read_u32(bytes: &[u8], offset: usize) -> io::Result<u32> {
     let slice = bytes
         .get(offset..offset + size_of::<u32>())
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "truncated Everything reply"))?;
-    Ok(u32::from_le_bytes(slice.try_into().unwrap()))
+    let array: [u8; 4] = slice
+        .try_into()
+        .expect("切片长度由上面的 get 保证是 4 字节");
+    Ok(u32::from_le_bytes(array))
 }
 
-fn read_utf16_z(bytes: &[u8], offset: u32, data_start: usize) -> io::Result<Option<Vec<u16>>> {
+/// 读一个 NUL 结尾的 UTF-16 串，返回**不含**结尾 NUL 的码元。
+///
+/// 偏移非法或没读到 NUL 都是协议错误（`Err`），没有"字符串不存在"这种第三种结果，
+/// 所以不套 `Option`。
+fn read_utf16_z(bytes: &[u8], offset: u32, data_start: usize) -> io::Result<Vec<u16>> {
     let mut cursor = offset as usize;
     if cursor < data_start || !cursor.is_multiple_of(2) || cursor >= bytes.len() {
         return Err(io::Error::new(
@@ -214,9 +215,12 @@ fn read_utf16_z(bytes: &[u8], offset: u32, data_start: usize) -> io::Result<Opti
                 "unterminated UTF-16 string in Everything reply",
             )
         })?;
-        let unit = u16::from_le_bytes(encoded.try_into().unwrap());
+        let array: [u8; 2] = encoded
+            .try_into()
+            .expect("切片长度由上面的 get 保证是 2 字节");
+        let unit = u16::from_le_bytes(array);
         if unit == 0 {
-            return Ok(Some(units));
+            return Ok(units);
         }
         units.push(unit);
         cursor += 2;
@@ -259,9 +263,8 @@ impl ReplyWindow {
             info.lpfnWndProc = Some(window_proc);
             info.hInstance = GetModuleHandleW(ptr::null()) as HINSTANCE;
             info.lpszClassName = class.as_ptr();
-            if RegisterClassExW(&info) == 0 {
-                // 已存在同名类时也会失败，忽略即可。
-            }
+            // 已存在同名类时也会失败，忽略即可。
+            let _ = RegisterClassExW(&raw const info);
         }
 
         // SAFETY: 类名已注册；消息专用窗口用 HWND_MESSAGE 作父窗口。
@@ -319,12 +322,7 @@ impl ReplyWindow {
     fn pump_until_reply(&self, timeout: Duration) -> io::Result<()> {
         let deadline = Instant::now() + timeout;
         loop {
-            if self
-                .reply
-                .lock()
-                .map(|guard| guard.is_some())
-                .unwrap_or(false)
-            {
+            if self.reply.lock().is_ok_and(|guard| guard.is_some()) {
                 return Ok(());
             }
             if Instant::now() >= deadline {
@@ -335,10 +333,13 @@ impl ReplyWindow {
             }
             // SAFETY: MSG 由 PeekMessageW 填充。
             let mut message: MSG = unsafe { std::mem::zeroed() };
-            let has_message = unsafe { PeekMessageW(&mut message, self.handle, 0, 0, PM_REMOVE) };
+            let has_message =
+                unsafe { PeekMessageW(&raw mut message, self.handle, 0, 0, PM_REMOVE) };
             if has_message != 0 {
                 let _ = unsafe {
-                    windows_sys::Win32::UI::WindowsAndMessaging::DispatchMessageW(&message)
+                    windows_sys::Win32::UI::WindowsAndMessaging::DispatchMessageW(
+                        &raw const message,
+                    )
                 };
             } else {
                 std::thread::sleep(Duration::from_millis(1));
@@ -365,7 +366,7 @@ impl Drop for ReplyWindow {
 unsafe extern "system" fn window_proc(
     window: HWND,
     message: u32,
-    _wparam: WPARAM,
+    wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
     unsafe {
@@ -392,7 +393,7 @@ unsafe extern "system" fn window_proc(
             }
             return 1;
         }
-        DefWindowProcW(window, message, _wparam, lparam)
+        DefWindowProcW(window, message, wparam, lparam)
     }
 }
 
@@ -455,10 +456,10 @@ mod tests {
             parse_reply(&reply_with_one_item(r"C:\Program Files\示例", "libcef.dll")).unwrap();
         assert_eq!(items.len(), 1);
         assert_eq!(
-            items[0].path.as_deref(),
-            Some(std::path::Path::new(r"C:\Program Files\示例"))
+            items[0].path,
+            std::path::Path::new(r"C:\Program Files\示例")
         );
-        assert_eq!(items[0].file_name.as_ref().unwrap(), "libcef.dll");
+        assert_eq!(items[0].file_name, "libcef.dll");
     }
 
     #[test]

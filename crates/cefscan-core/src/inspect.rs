@@ -24,7 +24,7 @@ pub fn inspect_directory(
         return DirInspection::default();
     };
     let mut entries: Vec<_> = entries.flatten().collect();
-    entries.sort_by_key(|entry| entry.path());
+    entries.sort_by_key(std::fs::DirEntry::path);
 
     let mut best: Option<(AppKind, &'static str)> = None;
     let mut best_path: Option<PathBuf> = None;
@@ -67,7 +67,7 @@ pub fn inspect_directory(
         let is_executable = false;
 
         let is_shared = is_shared_library(&name);
-        let is_windows_executable = name.ends_with(".exe");
+        let is_windows_executable = has_extension(&name, "exe");
         if !is_executable && !is_shared && !is_windows_executable {
             continue;
         }
@@ -117,10 +117,18 @@ pub fn inspect_directory(
     }
 }
 
+/// 文件名是否带某个扩展名（大小写不敏感，不依赖调用方预先转小写）。
+fn has_extension(name: &str, extension: &str) -> bool {
+    Path::new(name)
+        .extension()
+        .is_some_and(|found| found.eq_ignore_ascii_case(extension))
+}
+
 pub(crate) fn is_shared_library(name: &str) -> bool {
-    name.ends_with(".dll")
-        || name.ends_with(".dylib")
-        || name.ends_with(".so")
+    has_extension(name, "dll")
+        || has_extension(name, "dylib")
+        || has_extension(name, "so")
+        // `libcef.so.1` 这类带版本号的，扩展名是 `1`，只能按子串认。
         || name.contains(".so.")
 }
 
@@ -177,6 +185,21 @@ pub(crate) fn executable_score(path: &Path, directory: &Path) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 扩展名判定不依赖调用方是否预先转小写，且认得带版本号的 `libcef.so.1`。
+    #[test]
+    fn shared_libraries_are_recognised_by_extension() {
+        assert!(has_extension("Chrome.EXE", "exe"));
+        assert!(!has_extension("chrome", "exe"));
+        assert!(!has_extension("chrome.exe.bak", "exe"));
+
+        for name in ["libcef.dll", "libcef.so", "libcef.so.1", "libcef.dylib"] {
+            assert!(is_shared_library(name), "{name} 应该算共享库");
+        }
+        for name in ["chrome.exe", "myapp", "notes.txt"] {
+            assert!(!is_shared_library(name), "{name} 不该算共享库");
+        }
+    }
 
     #[test]
     fn only_framework_libraries_are_worth_scanning() {

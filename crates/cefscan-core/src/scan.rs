@@ -106,13 +106,18 @@ where
             .is_some_and(|path| process::is_running(&running, path));
         let info = to_app_info(app, is_running, size);
 
-        (on_app.lock().expect("callback poisoned"))(info.clone());
-        collected.lock().expect("collector poisoned").push(info);
+        (on_app
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner))(info.clone());
+        collected
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(info);
     });
 
     let apps = collected
         .into_inner()
-        .unwrap_or_else(|error| error.into_inner());
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
 
     let sum_bytes = apps.iter().map(|app| app.size).sum();
     let total_bytes = deduplicated_total(&apps);
@@ -155,6 +160,7 @@ fn deduplicated_total(apps: &[AppInfo]) -> u64 {
 }
 
 /// 只回答"这次扫描会选哪个后端"，**不扫描、不查询索引服务**。
+#[must_use]
 pub fn detect_backend(options: &ScanOptions) -> &'static str {
     match options.backend {
         Backend::Filesystem => FILESYSTEM_BACKEND,
@@ -215,9 +221,7 @@ fn resolve_scan_threads(configured: usize) -> usize {
     if configured > 0 {
         return configured;
     }
-    std::thread::available_parallelism()
-        .map(|n| n.get())
-        .unwrap_or(2)
+    std::thread::available_parallelism().map_or(2, std::num::NonZero::get)
 }
 
 #[cfg(test)]
@@ -245,8 +249,7 @@ mod tests {
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_nanos())
-                .unwrap_or(0)
+                .map_or(0, |d| d.as_nanos())
         ));
         fs::create_dir_all(&root).unwrap();
         Fixture { root }
@@ -335,8 +338,14 @@ mod tests {
         );
 
         assert_ne!(
-            by_path.iter().map(|app| app.path.clone()).collect::<Vec<_>>(),
-            by_kind.iter().map(|app| app.path.clone()).collect::<Vec<_>>(),
+            by_path
+                .iter()
+                .map(|app| app.path.clone())
+                .collect::<Vec<_>>(),
+            by_kind
+                .iter()
+                .map(|app| app.path.clone())
+                .collect::<Vec<_>>(),
             "kind 与 path 必须排出不同顺序"
         );
     }
@@ -346,7 +355,10 @@ mod tests {
     /// 曾经用 `apps.reverse()` 实现 `--ascending`，把路径也一起翻成降序。
     #[test]
     fn ascending_flips_only_the_primary_key() {
-        let mut apps = vec![app(r"D:\b", AppKind::Cef, 20), app(r"D:\a", AppKind::Cef, 20)];
+        let mut apps = vec![
+            app(r"D:\b", AppKind::Cef, 20),
+            app(r"D:\a", AppKind::Cef, 20),
+        ];
 
         sort_apps(&mut apps, SortKey::Size, Direction::Asc);
 
@@ -365,18 +377,20 @@ mod tests {
             &options_for(&fixture.root, Backend::Filesystem),
             |app| {
                 log.lock()
-                    .unwrap_or_else(|e| e.into_inner())
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
                     .push(format!("app:{}", app.path.display()));
             },
             |notice| {
                 log.lock()
-                    .unwrap_or_else(|e| e.into_inner())
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
                     .push(format!("notice:{}", notice.backend));
             },
         )
         .unwrap();
 
-        let log = log.into_inner().unwrap_or_else(|e| e.into_inner());
+        let log = log
+            .into_inner()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         assert_eq!(log.first().map(String::as_str), Some("notice:cefscan"));
         assert_eq!(log.len(), 2, "通知只发一次，然后才是结果：{log:?}");
         assert_eq!(stats.backend, "cefscan");

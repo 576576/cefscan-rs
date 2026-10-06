@@ -22,6 +22,7 @@ pub enum AppKind {
 
 impl AppKind {
     /// 优先级，数值越大越强。
+    #[must_use]
     pub const fn rank(self) -> u8 {
         match self {
             Self::Electron => 100,
@@ -36,6 +37,7 @@ impl AppKind {
     }
 
     /// 对外展示名，同时是 JSON / CSV 里的序列化值。
+    #[must_use]
     pub const fn label(self) -> &'static str {
         match self {
             Self::Electron => "electron",
@@ -51,6 +53,7 @@ impl AppKind {
     }
 
     /// 取更强的那个（`None` 视为最弱）。
+    #[must_use]
     pub fn strongest(self, other: Self) -> Self {
         if other.rank() > self.rank() {
             other
@@ -92,7 +95,7 @@ pub enum CandidateKind {
     Pak,
     /// `libcef.dll` / `Electron Framework` 之类的内核本体。
     Cef,
-    /// `libnode.dll` 之类，MiniElectron / MiniBlink 的线索。
+    /// `libnode.dll` 之类，MiniElectron / `MiniBlink` 的线索。
     Node,
 }
 
@@ -127,6 +130,7 @@ impl SortKey {
     ///
     /// 占用与类型都是「越大越靠前」更有用，路径则按字典序读起来更顺
     /// （`--sort path` 曾经就是路径升序，保持不动）。
+    #[must_use]
     pub const fn default_direction(self) -> Direction {
         match self {
             Self::Size | Self::Kind => Direction::Desc,
