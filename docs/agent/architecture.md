@@ -141,7 +141,7 @@ pub enum Backend { Auto, Index, Filesystem }
 | `include_hidden` / `follow_symlinks` | 是否包含隐藏目录 / 跟随符号链接 |
 | `walk_threads` / `scan_threads` | 遍历与扫描的并行度，`0` = 自动 |
 | `index_timeout` | Everything IPC 超时（默认 1500 ms） |
-| `sort_by_size` | 结果按大小降序（否则按路径升序，保证输出确定） |
+| `sort` / `sort_direction` | 排序主键（`Size` / `Path` / `Kind`）与方向（`Desc` / `Asc`）；次级键恒为路径升序 |
 | `detect_running` | 是否检测运行中进程 |
 
 `ScanStats` 同时给出两种占用口径，避免"总数对不上"的困惑：

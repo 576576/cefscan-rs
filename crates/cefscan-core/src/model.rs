@@ -110,6 +110,41 @@ pub enum Backend {
     Filesystem,
 }
 
+/// 结果排序依据。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SortKey {
+    /// 按磁盘占用。
+    #[default]
+    Size,
+    /// 按展示路径。
+    Path,
+    /// 按内核类型优先级（见 [`AppKind::rank`]）。
+    Kind,
+}
+
+impl SortKey {
+    /// 该主键的自然方向，也就是没给 `--ascending` 时的默认值。
+    ///
+    /// 占用与类型都是「越大越靠前」更有用，路径则按字典序读起来更顺
+    /// （`--sort path` 曾经就是路径升序，保持不动）。
+    pub const fn default_direction(self) -> Direction {
+        match self {
+            Self::Size | Self::Kind => Direction::Desc,
+            Self::Path => Direction::Asc,
+        }
+    }
+}
+
+/// 排序方向。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Direction {
+    /// 降序：主键越大越靠前。
+    #[default]
+    Desc,
+    /// 升序：主键越小越靠前。
+    Asc,
+}
+
 /// 扫描参数。
 #[derive(Debug, Clone)]
 pub struct ScanOptions {
@@ -127,8 +162,10 @@ pub struct ScanOptions {
     pub scan_threads: usize,
     /// Everything IPC 超时。
     pub index_timeout: Duration,
-    /// 结果按大小降序排列（否则按路径升序，保证输出确定）。
-    pub sort_by_size: bool,
+    /// 结果排序依据。
+    pub sort: SortKey,
+    /// 排序方向。次级键恒为路径升序，不受方向影响。
+    pub sort_direction: Direction,
     /// 是否检测运行中进程。
     pub detect_running: bool,
 }
@@ -150,7 +187,8 @@ impl Default for ScanOptions {
             walk_threads: 0,
             scan_threads: 0,
             index_timeout: Duration::from_millis(1500),
-            sort_by_size: true,
+            sort: SortKey::default(),
+            sort_direction: Direction::default(),
             detect_running: true,
         }
     }

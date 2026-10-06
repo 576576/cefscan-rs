@@ -62,8 +62,8 @@ cefscan -v                                # 附带命中的签名与最终使用
 | `-k, --kind <KIND>` | 只列出这些类型，可重复；取值见下 |
 | `--running-only` | 只显示正在运行的应用 |
 | `--min-size <SIZE>` | 只显示占用不小于此值的应用，如 `512MB`、`2GiB` |
-| `--sort <size\|path\|kind>` | 排序依据，默认 `size` |
-| `--ascending` | 升序排列（默认降序） |
+| `--sort <size\|path\|kind>` | 排序依据，默认 `size`。`kind` 按内核类型优先级 |
+| `--ascending` | 升序排列。默认方向随主键：占用 / 类型降序，路径升序 |
 | `--include-hidden` | 包含隐藏目录 |
 | `--no-running` | 不检测运行中进程（可略微加快扫描） |
 | `--exclude-dir <NAME>` | 追加排除的目录名，可重复 |

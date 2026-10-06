@@ -9,7 +9,8 @@ use std::time::Instant;
 use crate::error::ScanError;
 use crate::group::{DetectedApp, group};
 use crate::model::{
-    AppInfo, Backend, Candidate, FILESYSTEM_BACKEND, ScanNotice, ScanOptions, ScanStats,
+    AppInfo, Backend, Candidate, Direction, FILESYSTEM_BACKEND, ScanNotice, ScanOptions, ScanStats,
+    SortKey,
 };
 use crate::process::{self, ProcessKey};
 use crate::size::sizes_parallel_each;
@@ -34,22 +35,28 @@ pub struct ScanOutcome {
 pub fn scan(options: &ScanOptions) -> Result<ScanOutcome, ScanError> {
     let mut apps = Vec::new();
     let stats = scan_streaming(options, |app| apps.push(app), |_| {})?;
-    sort_apps(&mut apps, options.sort_by_size);
+    sort_apps(&mut apps, options.sort, options.sort_direction);
     Ok(ScanOutcome { apps, stats })
 }
 
-/// 把结果排成确定性顺序：默认按占用降序，否则按路径升序。
-pub fn sort_apps(apps: &mut [AppInfo], by_size: bool) {
-    if by_size {
-        apps.sort_by(|left, right| {
-            right
-                .size
-                .cmp(&left.size)
-                .then_with(|| left.path.cmp(&right.path))
-        });
-    } else {
-        apps.sort_by(|left, right| left.path.cmp(&right.path));
-    }
+/// 把结果排成确定性顺序：主键由 `key` 定、方向由 `direction` 定，
+/// **次级键恒为路径升序**（这样同主键下的次序永远确定）。
+///
+/// 方向必须在比较器里表达，不能事后 `reverse()` —— 那会把次级键一起翻转，
+/// 变成「size 升序 + 路径降序」。
+pub fn sort_apps(apps: &mut [AppInfo], key: SortKey, direction: Direction) {
+    apps.sort_by(|left, right| {
+        let primary = match key {
+            SortKey::Size => left.size.cmp(&right.size),
+            SortKey::Kind => left.kind.rank().cmp(&right.kind.rank()),
+            SortKey::Path => left.path.cmp(&right.path),
+        };
+        let primary = match direction {
+            Direction::Desc => primary.reverse(),
+            Direction::Asc => primary,
+        };
+        primary.then_with(|| left.path.cmp(&right.path))
+    });
 }
 
 /// 流式扫描：每识别出一个应用就回调一次，**边算边回调**。
@@ -216,6 +223,7 @@ fn resolve_scan_threads(configured: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::AppKind;
     use std::fs;
     use std::path::Path;
     use std::time::Duration;
@@ -274,6 +282,76 @@ mod tests {
             backend,
             ..ScanOptions::default()
         }
+    }
+
+    fn app(path: &str, kind: AppKind, size: u64) -> AppInfo {
+        AppInfo {
+            path: PathBuf::from(path),
+            root: PathBuf::from(path),
+            kind,
+            size,
+            running: false,
+            evidence: None,
+        }
+    }
+
+    /// 默认口径：占用降序，同尺寸时路径升序。
+    #[test]
+    fn size_sort_is_descending_with_ascending_paths() {
+        let mut apps = vec![
+            app(r"D:\b", AppKind::Cef, 10),
+            app(r"D:\c", AppKind::Cef, 20),
+            app(r"D:\a", AppKind::Cef, 20),
+        ];
+
+        sort_apps(&mut apps, SortKey::Size, Direction::Desc);
+
+        let sizes: Vec<u64> = apps.iter().map(|app| app.size).collect();
+        assert_eq!(sizes, vec![20, 20, 10], "占用必须降序");
+        assert_eq!(apps[0].path, PathBuf::from(r"D:\a"), "同尺寸时路径升序");
+        assert_eq!(apps[1].path, PathBuf::from(r"D:\c"));
+    }
+
+    /// `--sort kind` 必须与 `--sort path` 排出**不同**顺序。
+    ///
+    /// 曾经 `SortArg::Kind` 被压成一个 bool 落进 else 分支，`kind` 静默退化成 `path`。
+    #[test]
+    fn sort_kind_differs_from_sort_path() {
+        let base = [
+            app(r"D:\a-chrome\chrome.exe", AppKind::Chrome, 10),
+            app(r"D:\z-electron\app.exe", AppKind::Electron, 20),
+        ];
+
+        let mut by_path = base.to_vec();
+        sort_apps(&mut by_path, SortKey::Path, Direction::Asc);
+        assert_eq!(by_path[0].kind, AppKind::Chrome, "路径升序时 a-chrome 在前");
+
+        let mut by_kind = base.to_vec();
+        sort_apps(&mut by_kind, SortKey::Kind, Direction::Desc);
+        assert_eq!(
+            by_kind[0].kind,
+            AppKind::Electron,
+            "类型降序时 Electron（rank 100）在前"
+        );
+
+        assert_ne!(
+            by_path.iter().map(|app| app.path.clone()).collect::<Vec<_>>(),
+            by_kind.iter().map(|app| app.path.clone()).collect::<Vec<_>>(),
+            "kind 与 path 必须排出不同顺序"
+        );
+    }
+
+    /// 升序只翻转主键，**次级键仍是路径升序**。
+    ///
+    /// 曾经用 `apps.reverse()` 实现 `--ascending`，把路径也一起翻成降序。
+    #[test]
+    fn ascending_flips_only_the_primary_key() {
+        let mut apps = vec![app(r"D:\b", AppKind::Cef, 20), app(r"D:\a", AppKind::Cef, 20)];
+
+        sort_apps(&mut apps, SortKey::Size, Direction::Asc);
+
+        assert_eq!(apps[0].path, PathBuf::from(r"D:\a"), "同尺寸时路径仍升序");
+        assert_eq!(apps[1].path, PathBuf::from(r"D:\b"));
     }
 
     /// 后端名在第一条结果之前送达。

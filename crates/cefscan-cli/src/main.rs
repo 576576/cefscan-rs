@@ -46,9 +46,6 @@ fn main() -> ExitCode {
     if let Some(min) = min_size {
         apps.retain(|app| app.size >= min);
     }
-    if args.ascending {
-        apps.reverse();
-    }
 
     let text = match output::render(&apps, args.format) {
         Ok(text) => text,

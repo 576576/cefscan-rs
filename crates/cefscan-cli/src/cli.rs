@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use cefscan_core::{AppKind, Backend, ScanOptions};
+use cefscan_core::{AppKind, Backend, Direction, ScanOptions, SortKey};
 use clap::{Parser, ValueEnum};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -17,8 +17,11 @@ pub enum BackendArg {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum SortArg {
+    /// 按磁盘占用
     Size,
+    /// 按展示路径
     Path,
+    /// 按内核类型优先级
     Kind,
 }
 
@@ -80,7 +83,7 @@ pub struct Cli {
     #[arg(long, value_enum, default_value = "size")]
     pub sort: SortArg,
 
-    /// 升序排列（默认降序）
+    /// 升序排列（默认：占用 / 类型降序，路径升序）
     #[arg(long)]
     pub ascending: bool,
 
@@ -103,6 +106,11 @@ pub struct Cli {
 
 impl Cli {
     pub fn scan_options(&self) -> ScanOptions {
+        let sort = match self.sort {
+            SortArg::Size => SortKey::Size,
+            SortArg::Path => SortKey::Path,
+            SortArg::Kind => SortKey::Kind,
+        };
         let mut options = ScanOptions {
             roots: self.root.clone(),
             backend: match self.backend {
@@ -114,7 +122,12 @@ impl Cli {
             scan_threads: self.threads,
             include_hidden: self.include_hidden,
             detect_running: !self.no_running,
-            sort_by_size: matches!(self.sort, SortArg::Size),
+            sort,
+            sort_direction: if self.ascending {
+                Direction::Asc
+            } else {
+                sort.default_direction()
+            },
             ..ScanOptions::default()
         };
         options.exclude_dir_names.extend(self.exclude_dirs.clone());
@@ -202,6 +215,34 @@ mod tests {
         assert_eq!(parse_kind("electron").unwrap(), AppKind::Electron);
         assert_eq!(parse_kind("Mini_Electron").unwrap(), AppKind::MiniElectron);
         assert!(parse_kind("firefox").is_err());
+    }
+
+    /// `--sort` 的三个取值必须映射到三个**不同**的排序键（`kind` 曾经静默退化成 `path`），
+    /// 且默认方向随主键而定。
+    #[test]
+    fn sort_key_and_direction_are_mapped() {
+        let options = |args: &[&str]| Cli::try_parse_from(args).unwrap().scan_options();
+
+        assert_eq!(options(&["cefscan"]).sort, SortKey::Size, "默认按占用");
+
+        let size = options(&["cefscan", "--sort", "size"]);
+        assert_eq!(size.sort, SortKey::Size);
+        assert_eq!(size.sort_direction, Direction::Desc);
+
+        let path = options(&["cefscan", "--sort", "path"]);
+        assert_eq!(path.sort, SortKey::Path);
+        assert_eq!(path.sort_direction, Direction::Asc, "路径默认升序");
+
+        let kind = options(&["cefscan", "--sort", "kind"]);
+        assert_eq!(kind.sort, SortKey::Kind);
+        assert_eq!(kind.sort_direction, Direction::Desc, "类型默认降序");
+
+        let ascending = options(&["cefscan", "--sort", "size", "--ascending"]);
+        assert_eq!(
+            ascending.sort_direction,
+            Direction::Asc,
+            "--ascending 覆盖主键的默认方向"
+        );
     }
 
     /// `--backend` 的取值集合与顺序（`auto` / `cefscan` / `index`）。
