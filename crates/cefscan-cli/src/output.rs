@@ -207,4 +207,26 @@ mod tests {
         assert!(text.contains("没有找到"));
         assert_eq!(render(&[], Format::Json).unwrap(), "[]");
     }
+
+    /// 五种格式必须对同一个 `kind` 给出一致的字符串。`CefSharp` 曾经在 JSON / NDJSON / TOML
+    /// 里被 serde 的 `snake_case` 拆成 `cef_sharp`，而表格 / CSV 与前端 `KIND_COLORS`
+    /// 用的都是 `cefsharp` —— 结果是 CefSharp 应用在 GUI 里静默掉成 unknown 的灰色。
+    #[test]
+    fn every_format_agrees_on_the_kind_label() {
+        let apps = vec![app(AppKind::CefSharp)];
+
+        let json: serde_json::Value =
+            serde_json::from_str(&render(&apps, Format::Json).unwrap()).unwrap();
+        assert_eq!(json[0]["kind"], "cefsharp");
+
+        let ndjson: serde_json::Value =
+            serde_json::from_str(render(&apps, Format::Ndjson).unwrap().trim()).unwrap();
+        assert_eq!(ndjson["kind"], "cefsharp");
+
+        let toml: toml::Value = toml::from_str(&render(&apps, Format::Toml).unwrap()).unwrap();
+        assert_eq!(toml["apps"][0]["kind"].as_str(), Some("cefsharp"));
+
+        assert!(render(&apps, Format::Csv).unwrap().contains("cefsharp"));
+        assert!(render(&apps, Format::Table).unwrap().contains("cefsharp"));
+    }
 }

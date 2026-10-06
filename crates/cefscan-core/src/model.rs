@@ -16,6 +16,10 @@ pub enum AppKind {
     Edge,
     Chrome,
     Nwjs,
+    /// `label()` 是 `cefsharp`（`docs/schema.md` 冻结的取值），但 `rename_all = "snake_case"`
+    /// 会把 `CefSharp` 拆成 `cef_sharp`。这里显式覆盖 —— 前端 `KIND_COLORS` 与 `--kind`
+    /// 都按 `cefsharp` 认，用派生值就会让 CefSharp 在 GUI 里静默掉成 unknown 的灰色。
+    #[cfg_attr(feature = "serde", serde(rename = "cefsharp"))]
     CefSharp,
     MiniElectron,
     MiniBlink,
@@ -342,6 +346,22 @@ mod tests {
             "ALL 应按 rank 从强到弱排列：{ALL:?}",
             ALL = AppKind::ALL
         );
+    }
+
+    /// `label()` 与 `serde(rename_all = "snake_case")` 是两份手写映射：JSON / CSV 的
+    /// `kind` 字段用前者，消费方按后者理解，一旦分叉就是静默错配。
+    ///
+    /// 这个测试第一次跑就抓到了 `CefSharp` → `cef_sharp`（见 `CefSharp` 上的 `serde(rename)`）。
+    #[cfg(feature = "serde")]
+    #[test]
+    fn labels_match_the_serialized_form() {
+        for kind in AppKind::ALL {
+            assert_eq!(
+                serde_json::to_value(kind).unwrap(),
+                serde_json::Value::String(kind.label().to_owned()),
+                "{kind:?} 的 label 与序列化值不一致"
+            );
+        }
     }
 
     /// `--kind` 的解析走 `FromStr`，大小写与首尾空白都要宽容。
