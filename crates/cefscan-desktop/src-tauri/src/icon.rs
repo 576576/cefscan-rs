@@ -11,14 +11,21 @@ static CACHE: OnceLock<Mutex<HashMap<String, Option<String>>>> = OnceLock::new()
 pub fn data_url(path: &Path) -> Option<String> {
     let key = path.to_string_lossy().into_owned();
     let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    // 缓存锁中毒只意味着"上一次 insert 时有人 panic 了"，缓存本身仍然可用。
+    // 图标取不到只是少个图标，不该把整个 GUI 带崩 —— 所以一律 `into_inner` 而非 `unwrap`。
     {
-        let guard = cache.lock().unwrap();
+        let guard = cache
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some(cached) = guard.get(&key) {
             return cached.clone();
         }
     }
     let value = imp::extract(path);
-    cache.lock().unwrap().insert(key, value.clone());
+    cache
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .insert(key, value.clone());
     value
 }
 
