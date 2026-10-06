@@ -95,8 +95,11 @@ where
     let roots: Vec<PathBuf> = detected.iter().map(|app| app.root.clone()).collect();
 
     // 计量并行执行，回调需加锁。
+    //
+    // 统计只要体积，所以按 `index` 落位收集 `sizes`，不再为每条结果 clone 一个
+    // `AppInfo`（两个 PathBuf 的堆分配）。`detected` 与结果一一对应，本来就是现成的。
     let on_app = Mutex::new(on_app);
-    let collected: Mutex<Vec<AppInfo>> = Mutex::new(Vec::with_capacity(detected.len()));
+    let sizes: Mutex<Vec<u64>> = Mutex::new(vec![0_u64; detected.len()]);
 
     sizes_parallel_each(&roots, threads, |index, _path, size| {
         let app = &detected[index];
@@ -104,30 +107,28 @@ where
             .executable
             .as_deref()
             .is_some_and(|path| process::is_running(&running, path));
-        let info = to_app_info(app, is_running, size);
 
         (on_app
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner))(info.clone());
-        collected
+            .unwrap_or_else(std::sync::PoisonError::into_inner))(to_app_info(
+            app, is_running, size,
+        ));
+        sizes
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .push(info);
+            .unwrap_or_else(std::sync::PoisonError::into_inner)[index] = size;
     });
 
-    let apps = collected
+    let sizes = sizes
         .into_inner()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
 
-    let sum_bytes = apps.iter().map(|app| app.size).sum();
-    let total_bytes = deduplicated_total(&apps);
     let stats = ScanStats {
         backend: backend_name,
         dirs_scanned,
         candidates: candidates.len(),
-        apps: apps.len(),
-        sum_bytes,
-        total_bytes,
+        apps: detected.len(),
+        sum_bytes: sizes.iter().sum(),
+        total_bytes: deduplicated_total(&detected, &sizes),
         elapsed_ms: started.elapsed().as_millis() as u64,
     };
 
@@ -146,15 +147,18 @@ fn to_app_info(app: &DetectedApp, running: bool, size: u64) -> AppInfo {
 }
 
 /// 去重口径的总量：被其它根包含的目录不重复计入。
-fn deduplicated_total(apps: &[AppInfo]) -> u64 {
+///
+/// `sizes[i]` 必须与 `detected[i]` 对应（调用方保证两者等长且同序）。
+fn deduplicated_total(detected: &[DetectedApp], sizes: &[u64]) -> u64 {
     let mut total = 0_u64;
-    for app in apps {
-        if apps.iter().any(|other| {
-            other.root != app.root && crate::filter::path_starts_with(&app.root, &other.root)
-        }) {
+    for (index, app) in detected.iter().enumerate() {
+        let nested = detected.iter().enumerate().any(|(other_index, other)| {
+            other_index != index && crate::filter::path_starts_with(&app.root, &other.root)
+        });
+        if nested {
             continue;
         }
-        total = total.saturating_add(app.size);
+        total = total.saturating_add(sizes[index]);
     }
     total
 }

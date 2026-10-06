@@ -81,10 +81,17 @@ pub fn walk(options: &ScanOptions) -> Result<WalkResult, ScanError> {
         });
     }
 
-    let mut candidates = results
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .clone();
+    // 到这里 rayon scope 已经结束，所有 Arc 克隆都已 drop（`threads <= 1` 那条路径
+    // 更是从没克隆过），`try_unwrap` 能省掉「候选数 × 1 次 PathBuf 分配」。
+    let mut candidates = match Arc::try_unwrap(results) {
+        Ok(mutex) => mutex
+            .into_inner()
+            .unwrap_or_else(std::sync::PoisonError::into_inner),
+        Err(shared) => shared
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone(),
+    };
     candidates.sort_by(|a, b| a.path.cmp(&b.path));
     Ok(WalkResult {
         candidates,
