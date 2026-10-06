@@ -1,11 +1,14 @@
 //! 扫描结果的数据模型。
 
+use std::fmt;
 use std::path::PathBuf;
 use std::time::Duration;
 
 /// 应用所属的 Chromium 内核类型。
+///
+/// 刻意不加 `#[non_exhaustive]`：整个 workspace 同版本一起发，新增变体时让下游的 `match`
+/// 直接编译不过，比静默落进 `_` 分支安全（理由见 `docs/agent/decisions.md` §5）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-#[non_exhaustive]
 #[cfg_attr(feature = "serde", derive(serde::Serialize))]
 #[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
 pub enum AppKind {
@@ -21,6 +24,23 @@ pub enum AppKind {
 }
 
 impl AppKind {
+    /// 全部变体，按 [`Self::rank`] 从强到弱排列。
+    ///
+    /// `--kind` 的取值解析与报错列表都由它生成，所以新增变体时必须同步这里。
+    /// `label` / `rank` 的穷尽 `match` 会先逼你改，但漏掉 `ALL` 编译器不会吭声 ——
+    /// `model.rs` 的 `all_lists_every_variant` 测试就是补这个洞的。
+    pub const ALL: [Self; 9] = [
+        Self::Electron,
+        Self::Edge,
+        Self::Chrome,
+        Self::Nwjs,
+        Self::CefSharp,
+        Self::MiniElectron,
+        Self::MiniBlink,
+        Self::Cef,
+        Self::Unknown,
+    ];
+
     /// 优先级，数值越大越强。
     #[must_use]
     pub const fn rank(self) -> u8 {
@@ -51,17 +71,48 @@ impl AppKind {
             Self::Unknown => "unknown",
         }
     }
+}
 
-    /// 取更强的那个（`None` 视为最弱）。
-    #[must_use]
-    pub fn strongest(self, other: Self) -> Self {
-        if other.rank() > self.rank() {
-            other
-        } else {
-            self
-        }
+impl std::str::FromStr for AppKind {
+    type Err = ParseAppKindError;
+
+    /// 解析 `--kind` 的取值：忽略首尾空白，大小写不敏感。
+    fn from_str(raw: &str) -> Result<Self, Self::Err> {
+        let wanted = raw.trim().to_ascii_lowercase();
+        Self::ALL
+            .into_iter()
+            .find(|kind| kind.label() == wanted)
+            .ok_or_else(|| ParseAppKindError {
+                input: raw.to_owned(),
+            })
     }
 }
+
+/// 解析不出内核类型名时的错误。`Display` 里列出全部合法取值（由 [`AppKind::ALL`] 生成，
+/// 不会和实际支持的取值脱节）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParseAppKindError {
+    input: String,
+}
+
+impl fmt::Display for ParseAppKindError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "unknown kind `{}` (expected one of: ",
+            self.input
+        )?;
+        for (index, kind) in AppKind::ALL.iter().enumerate() {
+            if index > 0 {
+                formatter.write_str(", ")?;
+            }
+            formatter.write_str(kind.label())?;
+        }
+        formatter.write_str(")")
+    }
+}
+
+impl std::error::Error for ParseAppKindError {}
 
 /// 一个被识别出来的应用。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -111,6 +162,34 @@ pub enum Backend {
     Index,
     /// 只用文件系统遍历。
     Filesystem,
+}
+
+impl Backend {
+    /// 全部取值，顺序与 CLI `--backend` 的 `--help` 一致。
+    pub const ALL: [Self; 3] = [Self::Auto, Self::Filesystem, Self::Index];
+
+    /// 对外取值名。CLI 的 `--backend` 与 GUI 的请求字段都用这一套。
+    ///
+    /// 注意 `Filesystem` 的取值是 `cefscan`（遍历后端自己的名字，见 [`FILESYSTEM_BACKEND`]），
+    /// 不是 serde 派生出来的 `filesystem` —— 后者只是 `Backend` 自身被序列化时的形态，
+    /// 没人拿它当参数传。
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Index => "index",
+            Self::Filesystem => FILESYSTEM_BACKEND,
+        }
+    }
+
+    /// 从取值名解析。认不出来返回 `None`，由调用方决定是报错还是回落默认值
+    /// （CLI 报错，GUI 回落 `Auto`）。
+    #[must_use]
+    pub fn from_label(label: &str) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|backend| backend.label() == label)
+    }
 }
 
 /// 结果排序依据。
@@ -227,4 +306,73 @@ pub struct ScanStats {
 pub struct ScanNotice {
     /// 实际使用的后端名，取值与 `ScanStats::backend` 同源。
     pub backend: &'static str,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `ALL` 是 `label()` / `rank()` 之外的第二份清单，用这个测试把它钉住：
+    ///
+    /// - 下面的 `match` 没有 `_` 分支，新增变体时这里编译不过，逼着同步 `ALL`
+    ///   （否则 `--kind` 会静默认不出新类型，报错信息里也不会列它）；
+    /// - 顺带验证 `ALL` 真的是按 rank 从强到弱排的，`--kind` 的报错列表读起来才有序。
+    #[test]
+    fn all_lists_every_variant() {
+        let expected_label = |kind: AppKind| match kind {
+            AppKind::Electron => "electron",
+            AppKind::Edge => "edge",
+            AppKind::Chrome => "chrome",
+            AppKind::Nwjs => "nwjs",
+            AppKind::CefSharp => "cefsharp",
+            AppKind::MiniElectron => "mini_electron",
+            AppKind::MiniBlink => "mini_blink",
+            AppKind::Cef => "cef",
+            AppKind::Unknown => "unknown",
+        };
+
+        assert_eq!(AppKind::ALL.len(), 9, "变体数变了，ALL 也要跟着改");
+        for kind in AppKind::ALL {
+            assert_eq!(kind.label(), expected_label(kind), "{kind:?} 的 label 变了");
+        }
+        assert!(
+            AppKind::ALL
+                .windows(2)
+                .all(|pair| pair[0].rank() >= pair[1].rank()),
+            "ALL 应按 rank 从强到弱排列：{ALL:?}",
+            ALL = AppKind::ALL
+        );
+    }
+
+    /// `--kind` 的解析走 `FromStr`，大小写与首尾空白都要宽容。
+    #[test]
+    fn kinds_parse_from_their_labels() {
+        for kind in AppKind::ALL {
+            assert_eq!(kind.label().parse::<AppKind>().unwrap(), kind);
+        }
+        assert_eq!(
+            "  Mini_Electron ".parse::<AppKind>().unwrap(),
+            AppKind::MiniElectron
+        );
+
+        let error = "firefox".parse::<AppKind>().unwrap_err().to_string();
+        assert_eq!(
+            error,
+            "unknown kind `firefox` (expected one of: electron, edge, chrome, nwjs, cefsharp, \
+             mini_electron, mini_blink, cef, unknown)"
+        );
+    }
+
+    /// `Backend` 的取值名与 `BackendArg` / GUI 请求字段共用一套，必须能往返。
+    #[test]
+    fn backend_labels_round_trip() {
+        for backend in Backend::ALL {
+            assert_eq!(Backend::from_label(backend.label()), Some(backend));
+        }
+        assert!(
+            Backend::from_label("filesystem").is_none(),
+            "线上取值是 cefscan"
+        );
+        assert!(Backend::from_label("whatever").is_none());
+    }
 }

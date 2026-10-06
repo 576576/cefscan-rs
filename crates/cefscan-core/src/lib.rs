@@ -23,10 +23,10 @@ pub mod signature;
 pub mod size;
 pub mod walk;
 
-pub use error::{ScanError, ScanResult};
+pub use error::ScanError;
 pub use model::{
-    AppInfo, AppKind, Backend, Candidate, CandidateKind, Direction, FILESYSTEM_BACKEND, ScanNotice,
-    ScanOptions, ScanStats, SortKey,
+    AppInfo, AppKind, Backend, Candidate, CandidateKind, Direction, FILESYSTEM_BACKEND,
+    ParseAppKindError, ScanNotice, ScanOptions, ScanStats, SortKey,
 };
 pub use naming::display_name;
 pub use scan::{ScanOutcome, detect_backend, scan, scan_streaming, sort_apps};

@@ -129,7 +129,9 @@ where
         apps: detected.len(),
         sum_bytes: sizes.iter().sum(),
         total_bytes: deduplicated_total(&detected, &sizes),
-        elapsed_ms: started.elapsed().as_millis() as u64,
+        // `as_millis()` 是 u128：`as u64` 会静默截断（虽然一次扫描不可能跑 5.8 亿年），
+        // 用 `try_from` + 饱和把「不可能发生」写出来。
+        elapsed_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
     };
 
     Ok(stats)

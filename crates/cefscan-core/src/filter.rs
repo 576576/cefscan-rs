@@ -1,6 +1,5 @@
 //! 遍历剪枝规则。
 
-use std::collections::HashSet;
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
@@ -187,12 +186,6 @@ fn excluded_root_hit(path: &str, excluded_root: &str, explicit_roots: &[PathBuf]
         && !explicit_roots
             .iter()
             .any(|explicit| path_starts_with(explicit, Path::new(excluded_root)))
-}
-
-/// 允许在测试里复用的去重集合。
-#[must_use]
-pub fn dir_name_set(names: &[String]) -> HashSet<String> {
-    names.iter().map(|n| n.to_ascii_lowercase()).collect()
 }
 
 #[cfg(test)]

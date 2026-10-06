@@ -148,11 +148,13 @@ fn empty_request() -> ScanRequest {
 }
 
 fn to_options(request: &ScanRequest) -> ScanOptions {
-    let backend = match request.backend.as_deref() {
-        Some("index") => Backend::Index,
-        Some("cefscan") => Backend::Filesystem,
-        _ => Backend::Auto,
-    };
+    // 取值名与 CLI 的 `--backend` 同源（`auto` / `cefscan` / `index`）。与 CLI 的差别是
+    // 认不出来的值**静默回落 Auto** 而不是报错 —— GUI 是点出来的，多一次弹窗不如直接扫。
+    let backend = request
+        .backend
+        .as_deref()
+        .and_then(Backend::from_label)
+        .unwrap_or_default();
     let threads = request.threads.unwrap_or(0);
     ScanOptions {
         roots: request.roots.iter().map(PathBuf::from).collect(),

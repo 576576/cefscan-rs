@@ -88,18 +88,6 @@ where
     }
 }
 
-/// 并行统计一批目录，按输入顺序返回大小。
-#[must_use]
-pub fn sizes_parallel(paths: &[PathBuf], threads: usize) -> Vec<u64> {
-    let sizes = std::sync::Mutex::new(vec![0_u64; paths.len()]);
-    sizes_parallel_each(paths, threads, |index, _, size| {
-        sizes.lock().expect("size slot poisoned")[index] = size;
-    });
-    sizes
-        .into_inner()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -115,8 +103,12 @@ mod tests {
 
         // 100 + 250，目录 inode 自身的大小不算在内。
         assert_eq!(dir_size(&root), 350);
-        let parallel = sizes_parallel(std::slice::from_ref(&root), 4);
-        assert_eq!(parallel, vec![350]);
+        // 回调是 `Fn + Send + Sync`（要跨 rayon 线程调用），所以槽位得自己加锁。
+        let parallel = std::sync::Mutex::new(vec![0_u64; 1]);
+        sizes_parallel_each(std::slice::from_ref(&root), 4, |index, _, size| {
+            parallel.lock().unwrap()[index] = size;
+        });
+        assert_eq!(parallel.into_inner().unwrap(), vec![350]);
 
         fs::remove_dir_all(&root).unwrap();
     }

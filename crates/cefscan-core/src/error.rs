@@ -5,7 +5,6 @@ use std::path::PathBuf;
 
 /// 扫描过程中可能出现的错误。
 #[derive(Debug, thiserror::Error)]
-#[non_exhaustive]
 pub enum ScanError {
     /// 没有任何可遍历的根目录。
     #[error("no filesystem roots are available to scan")]
@@ -30,6 +29,3 @@ impl ScanError {
         Self::Io { path, source }
     }
 }
-
-/// 扫描结果：`Ok` 携带统计，单个条目失败只降级不中断。
-pub type ScanResult<T> = Result<T, ScanError>;

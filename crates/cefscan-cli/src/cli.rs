@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use cefscan_core::{AppKind, Backend, Direction, ScanOptions, SortKey};
+use cefscan_core::{AppKind, Backend, Direction, ParseAppKindError, ScanOptions, SortKey};
 use clap::{Parser, ValueEnum};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -13,6 +13,16 @@ pub enum BackendArg {
     Cefscan,
     /// 只用索引后端
     Index,
+}
+
+impl From<BackendArg> for Backend {
+    fn from(value: BackendArg) -> Self {
+        match value {
+            BackendArg::Auto => Self::Auto,
+            BackendArg::Cefscan => Self::Filesystem,
+            BackendArg::Index => Self::Index,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -113,11 +123,7 @@ impl Cli {
         };
         let mut options = ScanOptions {
             roots: self.root.clone(),
-            backend: match self.backend {
-                BackendArg::Auto => Backend::Auto,
-                BackendArg::Cefscan => Backend::Filesystem,
-                BackendArg::Index => Backend::Index,
-            },
+            backend: self.backend.into(),
             walk_threads: self.threads,
             scan_threads: self.threads,
             include_hidden: self.include_hidden,
@@ -136,11 +142,8 @@ impl Cli {
     }
 
     /// 解析 `--kind` 过滤条件，无法识别的类型直接报错。
-    pub fn kind_filter(&self) -> Result<Vec<AppKind>, String> {
-        self.kinds
-            .iter()
-            .map(|raw| parse_kind(raw))
-            .collect::<Result<Vec<_>, _>>()
+    pub fn kind_filter(&self) -> Result<Vec<AppKind>, ParseAppKindError> {
+        self.kinds.iter().map(|raw| parse_kind(raw)).collect()
     }
 
     pub fn min_size_bytes(&self) -> Result<Option<u64>, String> {
@@ -148,26 +151,14 @@ impl Cli {
     }
 }
 
-pub fn parse_kind(raw: &str) -> Result<AppKind, String> {
-    let wanted = raw.trim().to_ascii_lowercase();
-    for kind in [
-        AppKind::Electron,
-        AppKind::Edge,
-        AppKind::Chrome,
-        AppKind::Nwjs,
-        AppKind::CefSharp,
-        AppKind::MiniElectron,
-        AppKind::MiniBlink,
-        AppKind::Cef,
-        AppKind::Unknown,
-    ] {
-        if kind.label() == wanted {
-            return Ok(kind);
-        }
-    }
-    Err(format!(
-        "unknown kind `{raw}` (expected one of: electron, edge, chrome, nwjs, cefsharp, mini_electron, mini_blink, cef, unknown)"
-    ))
+/// 解析 `--kind` 的取值。
+///
+/// # Errors
+///
+/// 取值不在 [`AppKind::ALL`] 里时返回 [`ParseAppKindError`]，它的 `Display`
+/// 会列出全部合法取值（由 `ALL` 生成，不会和实际支持的取值脱节）。
+pub fn parse_kind(raw: &str) -> Result<AppKind, ParseAppKindError> {
+    raw.parse()
 }
 
 /// 解析 `512MB` / `2GiB` / `1048576` 这类写法。
@@ -268,5 +259,19 @@ mod tests {
                 && position("- cefscan:") < position("- index:"),
             "--help 里的取值次序应为 auto / cefscan / index：\n{help}"
         );
+    }
+
+    /// clap 的取值名（`ValueEnum` 自己拼的字符串）与 [`Backend::label`]（GUI 请求字段用的）
+    /// 是两份独立映射，必须永远一致，否则 GUI 传上来的值 CLI 不认、反之亦然。
+    #[test]
+    fn backend_arg_names_match_backend_labels() {
+        for arg in BackendArg::value_variants() {
+            let name = arg.to_possible_value().unwrap();
+            assert_eq!(
+                name.get_name(),
+                Backend::from(*arg).label(),
+                "{arg:?} 的 clap 取值名与 Backend::label 不一致"
+            );
+        }
     }
 }
