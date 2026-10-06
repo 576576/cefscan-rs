@@ -50,40 +50,37 @@ impl Filter {
     }
 
     /// 一个路径（目录**或文件**）是否通过全部规则。
+    ///
+    /// 写成谓词的合取：每一项都能单独命名、单独测，短路顺序也和原来的早返回链一致。
     #[must_use]
     pub fn allows_path(&self, path: &Path) -> bool {
-        if !self.in_roots(path) {
-            return false;
-        }
-        if self
-            .exclude_paths
-            .iter()
-            .any(|excluded| path_starts_with(path, excluded))
-        {
-            return false;
-        }
-        if !self.include_hidden && is_hidden(path) {
-            return false;
-        }
-        if self.is_platform_excluded(path) {
-            return false;
-        }
-        for component in path.components() {
-            let name = component.as_os_str();
-            if !self.include_hidden && component_is_hidden(name) {
-                return false;
-            }
-            if self.is_excluded_dir_name(name) || is_trash_dir(name) {
-                return false;
-            }
-        }
-        true
+        self.in_roots(path)
+            && !self.hits_excluded_path(path)
+            && (self.include_hidden || !is_hidden(path))
+            && !self.is_platform_excluded(path)
+            && !path
+                .components()
+                .any(|component| self.component_is_excluded(component.as_os_str()))
     }
 
     /// 一个目录是否值得进入。返回 `false` 时整棵子树都被跳过。
     #[must_use]
     pub fn allows_dir(&self, path: &Path) -> bool {
         self.allows_path(path)
+    }
+
+    /// 是否命中 `--exclude-path`。
+    fn hits_excluded_path(&self, path: &Path) -> bool {
+        self.exclude_paths
+            .iter()
+            .any(|excluded| path_starts_with(path, excluded))
+    }
+
+    /// 单个路径组件是否被排除：隐藏目录 / `--exclude-dir` / 回收站。
+    fn component_is_excluded(&self, name: &OsStr) -> bool {
+        (!self.include_hidden && component_is_hidden(name))
+            || self.is_excluded_dir_name(name)
+            || is_trash_dir(name)
     }
 
     /// 是否命中平台自己的排除规则。
@@ -157,10 +154,13 @@ pub fn path_starts_with(path: &Path, root: &Path) -> bool {
     if path.len() < root.len() {
         return false;
     }
-    for (index, expected) in root.iter().enumerate() {
-        if ascii_fold(path[index]) != ascii_fold(*expected) {
-            return false;
-        }
+    // `zip` 的长度已由上面保证，逐字节比较不再需要每次都做边界检查。
+    if !path
+        .iter()
+        .zip(root)
+        .all(|(byte, expected)| ascii_fold(*byte) == ascii_fold(*expected))
+    {
+        return false;
     }
     if matches!(root.last(), Some(b'/' | b'\\')) {
         return true;

@@ -136,18 +136,23 @@ fn build(dir: &Path, inspection: &DirInspection, default_kind: AppKind) -> Detec
     }
 }
 
-/// 同一 root 只保留最强的一条；rank 相同时，"有可执行文件"胜过"纯目录"。
+/// 同一 root 只保留最强的一条。
 fn insert(apps: &mut BTreeMap<PathBuf, DetectedApp>, detected: DetectedApp) {
-    match apps.get(&detected.root) {
-        Some(existing)
-            if existing.kind.rank() > detected.kind.rank()
-                || (existing.kind.rank() == detected.kind.rank()
-                    && !existing.is_dir
-                    && detected.is_dir) => {}
-        _ => {
-            apps.insert(detected.root.clone(), detected);
-        }
+    if apps
+        .get(&detected.root)
+        .is_some_and(|existing| beats(existing, &detected))
+    {
+        return;
     }
+    apps.insert(detected.root.clone(), detected);
+}
+
+/// `existing` 是否该压过 `candidate`：先比 rank；rank 相同时「有可执行文件」胜过「纯目录」。
+fn beats(existing: &DetectedApp, candidate: &DetectedApp) -> bool {
+    let existing_rank = existing.kind.rank();
+    let candidate_rank = candidate.kind.rank();
+    existing_rank > candidate_rank
+        || (existing_rank == candidate_rank && !existing.is_dir && candidate.is_dir)
 }
 
 /// 丢掉"未识别但被某个已识别应用包含"的目录。

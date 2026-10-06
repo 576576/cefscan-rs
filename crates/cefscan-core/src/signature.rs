@@ -93,10 +93,7 @@ impl SignatureScanner {
             };
             let available = retained + read;
             if let Some(hit) = strongest_in_chunk(&buffer[..available], rules) {
-                best = match best {
-                    Some(current) if current.0.rank() >= hit.0.rank() => Some(current),
-                    _ => Some(hit),
-                };
+                best = Some(best.map_or(hit, |current| stronger(current, hit)));
                 // Electron 是最高优先级，没有更强的可能，直接收工。
                 if best.is_some_and(|(kind, _)| kind == AppKind::Electron) {
                     break;
@@ -142,18 +139,28 @@ fn rules(entries: &[(AppKind, &'static str)]) -> Vec<Rule> {
         .collect()
 }
 
-fn strongest_in_chunk(chunk: &[u8], rules: &[Rule]) -> Option<(AppKind, &'static str)> {
-    let mut best: Option<(AppKind, &'static str)> = None;
-    for rule in rules {
-        if rule.finder.find(chunk).is_some() {
-            let candidate = (rule.kind, rule.needle);
-            best = match best {
-                Some(current) if current.0.rank() >= candidate.0.rank() => Some(current),
-                _ => Some(candidate),
-            };
-        }
+/// 取 rank 更强的那个；**并列时保留先到的**。
+///
+/// 这条"并列不换人"很重要：standard 规则里 Electron 有两条，直接换 `max_by_key`
+/// 会在并列时返回最后一个，`evidence` 就从 `third_party/electron_node` 变成
+/// `register_atom_browser_web_contents`，`--verbose` 与 GUI 提示都会跟着变。
+fn stronger(
+    current: (AppKind, &'static str),
+    candidate: (AppKind, &'static str),
+) -> (AppKind, &'static str) {
+    if candidate.0.rank() > current.0.rank() {
+        candidate
+    } else {
+        current
     }
-    best
+}
+
+fn strongest_in_chunk(chunk: &[u8], rules: &[Rule]) -> Option<(AppKind, &'static str)> {
+    rules
+        .iter()
+        .filter(|rule| rule.finder.find(chunk).is_some())
+        .map(|rule| (rule.kind, rule.needle))
+        .reduce(stronger)
 }
 
 /// ELF / PE / Mach-O 的 magic 检查。

@@ -1,6 +1,7 @@
 //! 目录检查：在一个候选目录里找出"这是什么应用"以及"它的主程序是哪个"。
 
 use std::fs;
+use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
 
 use crate::model::AppKind;
@@ -14,7 +15,80 @@ pub struct DirInspection {
     pub evidence: Option<&'static str>,
 }
 
+/// 单个条目的判定结果。
+enum Finding {
+    /// 这条不构成线索。
+    Skip,
+    /// 记下这条线索，继续看后面的条目。
+    Merge {
+        found: Option<(AppKind, &'static str)>,
+        path: PathBuf,
+        launchable: bool,
+    },
+    /// 文件名直接定案（Edge / Chrome），后面的条目不用看了。
+    Decided(DirInspection),
+}
+
+/// 累加出来的"这个目录里最好的线索"。
+#[derive(Default)]
+struct Best {
+    /// 最强签名命中。
+    signature: Option<(AppKind, &'static str)>,
+    /// 该命中所属的文件。
+    path: Option<PathBuf>,
+    /// 该文件是否可启动。
+    launchable: bool,
+    /// 兜底：没命中签名时，分最高的可启动文件。
+    fallback: Option<(u8, PathBuf)>,
+}
+
+impl Best {
+    fn merge(
+        &mut self,
+        dir: &Path,
+        found: Option<(AppKind, &'static str)>,
+        path: PathBuf,
+        launchable: bool,
+    ) {
+        if launchable {
+            let score = executable_score(&path, dir);
+            if self
+                .fallback
+                .as_ref()
+                .is_none_or(|(best_score, _)| score > *best_score)
+            {
+                self.fallback = Some((score, path.clone()));
+            }
+        }
+
+        if let Some((kind, needle)) = found
+            && self
+                .signature
+                .is_none_or(|(current, _)| kind.rank() > current.rank())
+        {
+            self.signature = Some((kind, needle));
+            self.path = Some(path);
+            self.launchable = launchable;
+        }
+    }
+
+    fn into_inspection(self) -> DirInspection {
+        DirInspection {
+            kind: self.signature.map(|(kind, _)| kind),
+            executable: if self.launchable {
+                self.path
+            } else {
+                self.fallback.map(|(_, path)| path)
+            },
+            evidence: self.signature.map(|(_, needle)| needle),
+        }
+    }
+}
+
 /// 检查单个目录。`scanner` 由调用方按任务持有并复用（含内部缓冲）。
+///
+/// 用 `try_fold` + `ControlFlow` 表达"逐条累加，遇到文件名定案就短路"，
+/// 取代原来 4 个可变局部 + 提前 `return` 的写法。
 pub fn inspect_directory(
     dir: &Path,
     flavor: Flavor,
@@ -28,94 +102,90 @@ pub fn inspect_directory(
     // `sort_by_cached_key` 每个条目只取一次 key。实测 n = 64 时 126 次 → 64 次。
     entries.sort_by_cached_key(std::fs::DirEntry::path);
 
-    let mut best: Option<(AppKind, &'static str)> = None;
-    let mut best_path: Option<PathBuf> = None;
-    let mut best_launchable = false;
-    let mut fallback: Option<(u8, PathBuf)> = None;
+    let outcome: ControlFlow<DirInspection, Best> =
+        entries
+            .into_iter()
+            .try_fold(Best::default(), |mut best, entry| {
+                match classify_entry(&entry, flavor, scanner) {
+                    Finding::Skip => {}
+                    Finding::Merge {
+                        found,
+                        path,
+                        launchable,
+                    } => best.merge(dir, found, path, launchable),
+                    Finding::Decided(inspection) => return ControlFlow::Break(inspection),
+                }
+                ControlFlow::Continue(best)
+            });
 
-    for entry in entries {
-        let Ok(metadata) = entry.metadata() else {
-            continue;
-        };
-        if !metadata.is_file() {
-            continue;
-        }
+    match outcome {
+        ControlFlow::Continue(best) => best.into_inspection(),
+        ControlFlow::Break(inspection) => inspection,
+    }
+}
 
-        let path = entry.path();
-        let name = entry.file_name().to_string_lossy().to_ascii_lowercase();
+/// Edge / Chrome 直接靠文件名定案。
+fn browser_from_file_name(lowercased: &str) -> Option<AppKind> {
+    match lowercased {
+        "msedge" | "msedge.exe" | "msedge_proxy.exe" => Some(AppKind::Edge),
+        "chrome" | "chrome.exe" => Some(AppKind::Chrome),
+        _ => None,
+    }
+}
 
-        // Edge / Chrome 靠文件名判定。
-        if matches!(flavor, Flavor::Standard) {
-            let special = match name.as_str() {
-                "msedge" | "msedge.exe" | "msedge_proxy.exe" => Some(AppKind::Edge),
-                "chrome" | "chrome.exe" => Some(AppKind::Chrome),
-                _ => None,
-            };
-            if let Some(kind) = special {
-                return DirInspection {
-                    kind: Some(kind),
-                    executable: Some(path),
-                    evidence: Some("filename"),
-                };
-            }
-        }
-
-        #[cfg(any(target_os = "linux", target_os = "macos"))]
-        let is_executable = {
-            use std::os::unix::fs::PermissionsExt;
-            metadata.permissions().mode() & 0o111 != 0
-        };
-        #[cfg(target_os = "windows")]
-        let is_executable = false;
-
-        let is_shared = is_shared_library(&name);
-        let is_windows_executable = has_extension(&name, "exe");
-        if !is_executable && !is_shared && !is_windows_executable {
-            continue;
-        }
-        if matches!(flavor, Flavor::Mini) && is_shared {
-            continue;
-        }
-        if matches!(flavor, Flavor::Standard) && is_shared && !is_relevant_shared_library(&name) {
-            continue;
-        }
-
-        let launchable = !is_shared
-            && !is_unwanted_executable(&name)
-            && (is_executable || is_windows_executable);
-
-        let Ok(found) = scanner.scan_file(&path, flavor) else {
-            continue;
-        };
-
-        if launchable {
-            let score = executable_score(&path, dir);
-            if fallback
-                .as_ref()
-                .is_none_or(|(best_score, _)| score > *best_score)
-            {
-                fallback = Some((score, path.clone()));
-            }
-        }
-
-        if let Some((kind, needle)) = found
-            && best.is_none_or(|(current, _)| kind.rank() > current.rank())
-        {
-            best = Some((kind, needle));
-            best_path = Some(path);
-            best_launchable = launchable;
-        }
+/// 判定单个目录条目。只读 `scanner` 的复用缓冲，可单独测。
+fn classify_entry(entry: &fs::DirEntry, flavor: Flavor, scanner: &mut SignatureScanner) -> Finding {
+    let Ok(metadata) = entry.metadata() else {
+        return Finding::Skip;
+    };
+    if !metadata.is_file() {
+        return Finding::Skip;
     }
 
-    let executable = if best_launchable {
-        best_path
-    } else {
-        fallback.map(|(_, path)| path)
+    let path = entry.path();
+    let name = entry.file_name().to_string_lossy().to_ascii_lowercase();
+
+    if matches!(flavor, Flavor::Standard)
+        && let Some(kind) = browser_from_file_name(&name)
+    {
+        return Finding::Decided(DirInspection {
+            kind: Some(kind),
+            executable: Some(path),
+            evidence: Some("filename"),
+        });
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    let is_executable = {
+        use std::os::unix::fs::PermissionsExt;
+        metadata.permissions().mode() & 0o111 != 0
     };
-    DirInspection {
-        kind: best.map(|(kind, _)| kind),
-        executable,
-        evidence: best.map(|(_, needle)| needle),
+    #[cfg(target_os = "windows")]
+    let is_executable = false;
+
+    let is_shared = is_shared_library(&name);
+    let is_windows_executable = has_extension(&name, "exe");
+    if !is_executable && !is_shared && !is_windows_executable {
+        return Finding::Skip;
+    }
+    if matches!(flavor, Flavor::Mini) && is_shared {
+        return Finding::Skip;
+    }
+    if matches!(flavor, Flavor::Standard) && is_shared && !is_relevant_shared_library(&name) {
+        return Finding::Skip;
+    }
+
+    let launchable =
+        !is_shared && !is_unwanted_executable(&name) && (is_executable || is_windows_executable);
+
+    let Ok(found) = scanner.scan_file(&path, flavor) else {
+        return Finding::Skip;
+    };
+
+    Finding::Merge {
+        found,
+        path,
+        launchable,
     }
 }
 

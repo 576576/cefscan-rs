@@ -112,13 +112,10 @@ pub fn display_name(path: &Path) -> String {
 /// 去掉 `WindowsApps` 那种包目录名的后缀：
 /// `Crystalnix.Termius_10.1.0.0_x64__0m0t0j9spf6x8` → `Crystalnix.Termius`。
 fn strip_package_suffix(name: &str) -> &str {
-    let bytes = name.as_bytes();
-    for (index, byte) in bytes.iter().enumerate() {
-        if *byte == b'_' && bytes.get(index + 1).is_some_and(u8::is_ascii_digit) {
-            return &name[..index];
-        }
-    }
-    name
+    name.as_bytes()
+        .windows(2)
+        .position(|pair| pair[0] == b'_' && pair[1].is_ascii_digit())
+        .map_or(name, |index| &name[..index])
 }
 
 fn is_generic(name: &str) -> bool {
