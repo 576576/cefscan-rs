@@ -90,15 +90,17 @@ docs/                 user-guide.md（用户指南）+ agent/（开发者文档�
 Release 提供解压即用的平台包，每个平台一个 zip，解开就是自包含目录：
 
 ```
-cefscan-{版本}-{windows-x86_64|linux-x86_64}/
+cefscan-{版本}-{windows|linux}-{x86_64|arm64}[-gnullvm]/
   ├─ cefscan.exe / cefscan
   ├─ cefscanw.exe / cefscanw
   ├─ README.md
   └─ LICENSE
 ```
 
-推送 `main` 自动出 alpha 预发布；手动触发 Release workflow 可选 `alpha` / `beta` /
-`release` 三个通道。每次运行的产物也挂在 Actions 页对应 run 的 Artifacts 上。
+推送 `main` 自动出 alpha 预发布（默认 x64 双平台）；手动触发 Release workflow 可选
+`alpha` / `beta` / `release` 三个通道，并自选平台架构（x64 / arm64）与 Windows 工具链
+（msvc / gnullvm / 两套都出）。带 `-gnullvm` 的包多一个 `WebView2Loader.dll`，是图形界面
+要用的。每次运行的产物也挂在 Actions 页对应 run 的 Artifacts 上。
 
 ### 本地构建
 

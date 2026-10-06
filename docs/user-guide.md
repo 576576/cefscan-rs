@@ -20,12 +20,16 @@ Chrome —— 给出它们的磁盘占用与是否正在运行。
 从 Release 下载对应平台的压缩包，解开就是自包含目录，直接运行即可，不需要安装：
 
 ```
-cefscan-{版本}-{windows-x86_64|linux-x86_64}/
+cefscan-{版本}-{windows|linux}-{x86_64|arm64}[-gnullvm]/
   ├─ cefscan.exe / cefscan
   ├─ cefscanw.exe / cefscanw
   ├─ README.md
   └─ LICENSE
 ```
+
+Windows 有两种工具链的包：**不带后缀的是 MSVC 构建**，带 `-gnullvm` 的是 llvm-mingw 构建，
+后者包里多一个 `WebView2Loader.dll`（图形界面需要，别删）。两者功能一致，挑一个即可，
+不确定就用不带后缀的。每个 Release 具体出了哪些平台，看 Release 正文里的表格。
 
 两个程序都是静态链接，只依赖 Windows 自带的系统 DLL；图形界面依赖系统自带的
 WebView2（Windows 10/11 默认已装）。

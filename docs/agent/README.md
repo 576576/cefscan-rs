@@ -9,7 +9,7 @@
 | [`gui.md`](gui.md) | 图形界面：前端形态与通信、后端状态标签（chip）、应用名启发式、图标提取、三视图与卡片墙、路径折叠、前端三层验证 |
 | [`performance.md`](performance.md) | 性能措施、实测基线（遍历 / 签名扫描）、`fsindex` 评估与否决 |
 | [`testing.md`](testing.md) | 测试策略、确定性要求、跨平台硬规矩、CI 暴露的问题 |
-| [`ci-release.md`](ci-release.md) | 三个 workflow、触发通道与版本号、Cargo profile |
+| [`ci-release.md`](ci-release.md) | 三个 workflow、dispatch 输入与目标矩阵、发行说明结构、触发通道与版本号、Cargo profile |
 | [`decisions.md`](decisions.md) | 参考实现盘点（继承 / 不继承）、里程碑与进度、参考索引 |
 
 ## 快速上手
@@ -22,6 +22,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 node tools/ui_harness.js                  # 前端逻辑（DOM 桩，不需要 npm）
 python tools/check_icons.py               # 图标齐全且为 RGBA
 python tools/ci_check.py                  # 改 workflow 后先静态校验（需 pyyaml）
+python tools/release_scripts_check.py     # release.yml 两段计算脚本真跑一遍（需 Git Bash）
 ```
 
 构建产物目录 `dist/` 与 CI 口径一致：`cefscan.exe` / `cefscanw.exe` / `README.md` /
