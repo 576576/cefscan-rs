@@ -117,7 +117,7 @@ def main() -> int:
         if name == "lint.yml":
             check(set(trig) == {"workflow_call", "workflow_dispatch"}, f"{name} 只由 workflow_call / dispatch 触发", str(set(trig)))
             check("push" not in trig and "pull_request" not in trig, f"{name} 不跟 push / PR")
-            check(jobs == {"frontend", "fmt", "clippy", "test"}, f"{name} 四个 job 齐全", str(sorted(jobs)))
+            check(jobs == {"frontend", "fmt", "clippy", "miri", "test"}, f"{name} 五个 job 齐全", str(sorted(jobs)))
         elif name == "build.yml":
             check(set(trig) == {"workflow_call"}, f"{name} 只由 workflow_call 触发", str(set(trig)))
             check(jobs == {"build"}, f"{name} 只有 build job", str(sorted(jobs)))

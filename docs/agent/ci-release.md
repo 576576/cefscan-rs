@@ -4,17 +4,18 @@
 
 | 文件 | 角色 |
 | --- | --- |
-| `lint.yml` | **质量门禁**：图标校验 / 前端逻辑 / rustfmt / clippy / 全量测试。**不跟 push / PR**，只由 `release.yml` 在构建之前调起（`workflow_call`），或手动 dispatch 单跑 |
+| `lint.yml` | **质量门禁**：图标校验 / 前端逻辑 / rustfmt / clippy / Miri / 全量测试。**不跟 push / PR**，只由 `release.yml` 在构建之前调起（`workflow_call`），或手动 dispatch 单跑 |
 | `build.yml` | **可复用构建**（只由 `workflow_call` 触发）：接收 prep 算好的版本号与**目标矩阵**，按矩阵逐条编译打包，`upload-artifact` 上传 |
 | `release.yml` | **唯一入口**：推送 main → 自动 alpha；手动 dispatch → alpha / beta / release。算版本号 → 调 lint → 调 build → publish 建 Release |
 
-## 1. `lint.yml` 的四个 job
+## 1. `lint.yml` 的五个 job
 
 | job | 平台 | 做什么 |
 | --- | --- | --- |
 | `frontend` | ubuntu | `python3 tools/check_icons.py`、`node tools/ui_harness.js` |
 | `fmt` | ubuntu | `cargo fmt --all --check` |
 | `clippy` | ubuntu | `cargo clippy --workspace --all-targets --locked -- -D warnings` + feature 组合矩阵 |
+| `miri` | ubuntu | nightly + `cargo miri test -p cefscan-core --lib -- miri_`：只跑纯字节解析的对抗性入口，本机实测 45 秒（见 [`testing.md`](testing.md) §5） |
 | `test` | windows + ubuntu | `cargo test --workspace --locked --no-fail-fast --profile ci`（Windows 上额外覆盖 `cefscanw` 的图标提取测试，那些是 `cfg(windows)` 的） |
 
 ## 2. 触发与通道

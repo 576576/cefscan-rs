@@ -62,6 +62,23 @@ jobs:
           cargo check -p cefscan-core --locked --no-default-features --features everything
           cargo check -p cefscan-core --locked --no-default-features --features serde,everything
 
+  miri:
+    name: miri（纯字节解析）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      # 只跑 everything_codec / signature 里 miri_ 前缀的对抗性入口（本机实测 45 秒）；整个 core 交给 Miri 会在 rayon 线程上直接失败。
+      - name: 安装 Rust（nightly + miri）
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: miri, rust-src
+      - name: 缓存 cargo 与 target
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: miri
+      - name: 对抗性字节解析
+        run: cargo miri test -p cefscan-core --lib --locked -- miri_
+
   test:
     name: test (${{ matrix.name }})
     runs-on: ${{ matrix.os }}
