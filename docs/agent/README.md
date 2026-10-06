@@ -8,6 +8,7 @@
 | [`architecture.md`](architecture.md) | 目标与非目标、总体架构、Workspace 布局、数据模型、五阶段流水线、Everything IPC、依赖清单、风险 |
 | [`gui.md`](gui.md) | 图形界面：前端形态与通信、后端状态标签（chip）、应用名启发式、图标提取、三视图与卡片墙、路径折叠、前端三层验证 |
 | [`performance.md`](performance.md) | 性能措施、实测基线（遍历 / 签名扫描）、`fsindex` 评估与否决 |
+| [`benchmark.md`](benchmark.md) | 历次优化的前后对照：端到端 + 微基准，含"量不出来"的那几项 |
 | [`testing.md`](testing.md) | 测试策略、确定性要求、跨平台硬规矩、CI 暴露的问题 |
 | [`ci-release.md`](ci-release.md) | 三个 workflow、dispatch 输入与目标矩阵、发行说明结构、触发通道与版本号、Cargo profile |
 | [`decisions.md`](decisions.md) | 参考实现盘点（继承 / 不继承）、里程碑与进度、参考索引 |
