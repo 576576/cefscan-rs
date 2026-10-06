@@ -16,6 +16,12 @@ use crate::process::{self, ProcessKey};
 use crate::size::sizes_parallel_each;
 use crate::walk::walk;
 
+// 纯字节编解码。真实调用点只有 Windows 的 `everything`，但这一层本身不依赖任何 Windows
+// API，所以测试构建里所有平台都带上它 —— 这样编解码测试能在 Linux / macOS 跑，
+// 也能被 Miri 解释执行。非 Windows 的非测试构建里不编译，避免 dead_code。
+#[cfg(all(feature = "everything", any(target_os = "windows", test)))]
+mod everything_codec;
+
 #[cfg(all(feature = "everything", target_os = "windows"))]
 mod everything;
 

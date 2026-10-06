@@ -59,7 +59,8 @@ cefscan-rs/
 │   │       ├── candidate.rs   # 候选文件名分类
 │   │       ├── walk.rs        # 自写并行遍历（回退后端）
 │   │       ├── scan.rs        # 编排：discover / scan / scan_streaming / detect_backend
-│   │       ├── scan/everything.rs  # Windows Everything IPC（feature = "everything"）
+│   │       ├── scan/everything.rs        # Windows Everything IPC（feature = "everything"）
+│   │       ├── scan/everything_codec.rs  # IPC 编解码，平台中立（测试构建全平台编译，见 testing.md §5）
 │   │       ├── signature.rs   # 签名表 + 分块扫描器（对 impl Read 工作）
 │   │       ├── inspect.rs     # 目录检查：挑可执行文件、打分
 │   │       ├── group.rs       # 按应用根分组、去重、父子包含消解
@@ -180,6 +181,7 @@ impl Backend {
 | --- | --- | --- |
 | `walk.rs` | 全平台 | 自写并行遍历，默认回退路径 |
 | `scan/everything.rs` | Windows | Everything IPC，见 §6 |
+| `scan/everything_codec.rs` | 全平台 | 上者的协议编解码，**不含任何 Windows API**，所以能在 Linux / macOS / Miri 下测 |
 | `plocate` / `spotlight` | Linux / macOS | 后置，接口已留 |
 
 **`Auto` 语义**：先试索引后端，**失败即回落**到遍历，并把实际使用的后端名报出来，

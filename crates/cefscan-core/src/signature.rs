@@ -194,6 +194,35 @@ mod tests {
 
     use super::*;
 
+    /// Miri 专用入口：magic 判定是纯字节解析，不碰 I/O 也不碰 Win32，所以能进 Miri。
+    /// 把各种长度与首字节都过一遍，确认没有越界读。
+    ///
+    /// 普通 `cargo test` 不跑（原生下这个循环没有信息量）。跑法：
+    /// `cargo +nightly miri test -p cefscan-core --lib -- miri_`
+    #[cfg(miri)]
+    #[test]
+    fn miri_executable_magic_never_panics() {
+        for len in 0..8_usize {
+            for byte in [0x00_u8, 0x01, 0x4d, 0x5a, 0x7f, 0xfe, 0xff] {
+                let _ = is_executable_magic(&vec![byte; len]);
+            }
+        }
+        // 各种 magic 的前缀（含"长度够但内容不对"与"内容对但长度不够"两侧）。
+        for prefix in [
+            &b"\x7fEL"[..],
+            b"\x7fELF",
+            b"MZ",
+            b"\xfe\xed\xfa\xce",
+            b"\xce\xfa\xed\xfe",
+            b"\xca\xfe\xba\xbe",
+            b"\xca\xfe\xba\xbf",
+            b"\x00\x00\x00\x00",
+            b"",
+        ] {
+            let _ = is_executable_magic(prefix);
+        }
+    }
+
     fn standard(bytes: &[u8]) -> Option<AppKind> {
         SignatureScanner::new()
             .scan_read(&mut Cursor::new(bytes.to_vec()), Flavor::Standard)

@@ -76,11 +76,37 @@ Linux 这一列此前**从来没跑过**，一次就翻出四类只在 Unix 上�
 跑 Linux 测试的环境（没有 WSL / 容器），所以**要么把规则抽成平台无关的纯函数**，**要么就
 靠 CI 兜底**。
 
-## 5. 尚未做（按优先级排）
+## 5. Miri：纯字节解析的入口
+
+Miri 跑不了 Win32 FFI，所以它在这类项目里通常没得测。但**协议编解码与 magic 判定是纯字节
+处理**，可以整段交给 Miri：
+
+- `scan/everything_codec.rs` —— Everything IPC 的编解码，**平台中立**（不依赖任何 Windows API）。
+  真实调用点只有 Windows 的 `scan/everything.rs`，但这一层在**测试构建里所有平台都编译**，
+  于是编解码测试在 Linux / macOS 的 `cargo test` 里也跑得到 —— 这本身修掉了一个覆盖缺口
+  （以前这些测试只在 Windows 上跑）。
+- `signature::is_executable_magic` —— ELF / PE / Mach-O 的 magic 判定。
+
+两处各有一个 `#[cfg(miri)]` 的对抗性入口，普通 `cargo test` 不跑（Miri 慢两三个数量级）：
+
+```bash
+rustup toolchain install nightly --profile minimal --component miri,rust-src
+cargo +nightly miri test -p cefscan-core --lib -- miri_
+```
+
+- `everything_codec::tests::miri_malformed_replies_never_panic`：长度取 14 个关键边界 × 5 种填充，
+  每条再把文件名偏移指到**每一个**可能位置（含落在头部、奇数、越界），确认 `read_u32` /
+  `read_utf16_z` 的边界检查都兜得住。
+- `signature::tests::miri_executable_magic_never_panics`：长度 0..8 × 7 种首字节，加各 magic 的
+  前缀（"长度够但内容不对"与"内容对但长度不够"两侧都覆盖）。
+
+**别把整个 core 丢给 Miri**：`cargo +nightly miri test -p cefscan-core --lib` 会在
+`group::inspect_parallel` 的 rayon 线程上直接报错退出（Miri 不支持真实并发），`signature` 的
+扫描器测试也慢到 6 分钟以上跑不完。范围就限定在上面这两条 `miri_` 前缀的入口。
+
+## 6. 尚未做（按优先级排）
 
 - `cargo llvm-cov` 覆盖率，core crate 门槛先定 70%。
 - `cargo deny check`（license + advisory）。
-- `cargo miri test` 跑 `unsafe`（Windows FFI）—— 注意 miri 跑不了 Win32 FFI，实际能覆盖的
-  只有纯逻辑部分。`// SAFETY:` 注释已经在写了。
 - `cargo +1.92.0 check` 显式验 MSRV。现在靠 `rust-version` 字段兜底（toolchain 低于该版本
   时 cargo 直接报错），CI 用的是 `@stable`。
