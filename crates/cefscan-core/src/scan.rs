@@ -2,7 +2,7 @@
 
 use std::collections::HashSet;
 use std::io;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::Instant;
 
@@ -151,15 +151,30 @@ fn to_app_info(app: &DetectedApp, running: bool, size: u64) -> AppInfo {
 /// 去重口径的总量：被其它根包含的目录不重复计入。
 ///
 /// `sizes[i]` 必须与 `detected[i]` 对应（调用方保证两者等长且同序）。
+///
+/// 按 root 长度升序处理。能包含别人的根一定**严格更短**，所以轮到某个 app 时：
+///
+/// - 它所有可能的「祖先」都已经进了 `kept`；
+/// - `kept` 本身也是按长度非降序推入的，只需跟「比它短」的那一段比（`partition_point`）。
+///   长度相同的根不可能互相包含 —— 于是"2000 个互不嵌套的同级应用"这种情形直接退化成
+///   O(n log n) 排序。原来是 O(n²) 的全表扫描。
 fn deduplicated_total(detected: &[DetectedApp], sizes: &[u64]) -> u64 {
+    let mut order: Vec<usize> = (0..detected.len()).collect();
+    order.sort_by_cached_key(|index| detected[*index].root.as_os_str().as_encoded_bytes().len());
+
     let mut total = 0_u64;
-    for (index, app) in detected.iter().enumerate() {
-        let nested = detected.iter().enumerate().any(|(other_index, other)| {
-            other_index != index && crate::filter::path_starts_with(&app.root, &other.root)
-        });
-        if nested {
+    let mut kept: Vec<&Path> = Vec::new();
+    for index in order {
+        let root = detected[index].root.as_path();
+        let length = root.as_os_str().as_encoded_bytes().len();
+        let shorter = kept.partition_point(|top| top.as_os_str().as_encoded_bytes().len() < length);
+        if kept[..shorter]
+            .iter()
+            .any(|top| crate::filter::path_starts_with(root, top))
+        {
             continue;
         }
+        kept.push(root);
         total = total.saturating_add(sizes[index]);
     }
     total
@@ -302,6 +317,70 @@ mod tests {
             running: false,
             evidence: None,
         }
+    }
+
+    /// `deduplicated_total` 用的构造器：只有 `root` 与 `kind` 影响结论。
+    fn detected(root: &str, kind: AppKind) -> DetectedApp {
+        DetectedApp {
+            display: PathBuf::from(root),
+            executable: None,
+            kind,
+            evidence: None,
+            root: PathBuf::from(root),
+            is_dir: true,
+        }
+    }
+
+    /// 被别的根包含的目录不重复计入：嵌套任意深都算，大小写与斜杠方向不影响判断
+    /// （沿用 `path_starts_with` 的既有语义），名字相近但不是子树不能误伤。
+    #[test]
+    fn deduplicated_total_skips_roots_contained_in_others() {
+        assert_eq!(deduplicated_total(&[], &[]), 0, "空输入不能 panic");
+
+        // 四层里的中间两层都被 outer 包着，只算 outer + other。
+        let apps = vec![
+            detected(r"C:\apps\outer", AppKind::Cef),
+            detected(r"C:\apps\outer\inner\deep", AppKind::Electron),
+            detected(r"C:\apps\outer\inner", AppKind::Cef),
+            detected(r"C:\apps\other", AppKind::Cef),
+        ];
+        assert_eq!(deduplicated_total(&apps, &[100, 7, 3, 50]), 150);
+
+        // 大小写 / 斜杠方向不同也算被包含。
+        let apps = vec![
+            detected(r"c:/APPS/outer", AppKind::Cef),
+            detected(r"C:\apps\OUTER\inner", AppKind::Electron),
+        ];
+        assert_eq!(deduplicated_total(&apps, &[100, 7]), 100);
+
+        // 前缀相近但不是子树：两条都要算。
+        let apps = vec![
+            detected(r"C:\apps\outer", AppKind::Cef),
+            detected(r"C:\apps\outer2", AppKind::Cef),
+        ];
+        assert_eq!(deduplicated_total(&apps, &[100, 50]), 150);
+    }
+
+    /// 长度相同的根不可能互相包含，所以只跟「严格更短」的已保留根比。
+    ///
+    /// 唯一的例外是「仅大小写 / 斜杠方向不同」这种病态输入：`path_starts_with` 会认为它们
+    /// 互为前缀，而长度剪枝不会。新实现按「两条都算」处理 —— 同一个扫描里的根来自同一个
+    /// 后端，Windows 上不会出现只差大小写的两条；Linux 是大小写敏感文件系统，本来就不该
+    /// 当成同一个目录，所以这里反而是修掉了一个误判。
+    #[test]
+    fn equal_length_roots_are_never_treated_as_nested() {
+        let apps = vec![
+            detected(r"c:\apps\outer", AppKind::Cef),
+            detected(r"C:\apps\OUTER", AppKind::Cef),
+        ];
+        assert_eq!(deduplicated_total(&apps, &[100, 7]), 107);
+
+        // 同级但名字不同的两千条：全部保留，且不再退化成 O(n²)。
+        let apps: Vec<DetectedApp> = (0..2000)
+            .map(|index| detected(&format!(r"C:\apps\app{index:04}"), AppKind::Cef))
+            .collect();
+        let sizes = vec![1_u64; apps.len()];
+        assert_eq!(deduplicated_total(&apps, &sizes), 2000);
     }
 
     /// 默认口径：占用降序，同尺寸时路径升序。

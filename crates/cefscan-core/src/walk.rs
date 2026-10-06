@@ -157,11 +157,14 @@ fn worker_loop(
         if guard.pending == 0 {
             break;
         }
+        // 无条件等待，不设超时。全部状态变更都在同一把 mutex 下，`notify_all` 覆盖了
+        // 所有会让等待者前进的变更点（push 子目录、`pending` 归零），等待者被唤醒后
+        // 也一定重新持锁复查 —— 不存在丢失唤醒的窗口。原来用 1 ms 超时，队列空但还有
+        // 目录在途时每个线程每秒白醒 1000 次（8 线程 = 8000 次/秒）。
         guard = shared
             .cvar
-            .wait_timeout(guard, std::time::Duration::from_millis(1))
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .0;
+            .wait(guard)
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
     }
 }
 

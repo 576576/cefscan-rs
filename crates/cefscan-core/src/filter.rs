@@ -51,11 +51,14 @@ impl Filter {
     /// 一个路径（目录**或文件**）是否通过全部规则。
     ///
     /// 写成谓词的合取：每一项都能单独命名、单独测，短路顺序也和原来的早返回链一致。
+    ///
+    /// 目录级的那几条（隐藏 / `--exclude-dir` / 回收站 / Windows 平台目录）全部合进
+    /// [`Self::component_is_excluded`]，`components()` 只走一遍 —— 原来是三遍
+    /// （`is_hidden` 一遍、平台检查一遍、逐组件检查一遍），而这条路径每个目录都要过一次。
     #[must_use]
     pub fn allows_path(&self, path: &Path) -> bool {
         self.in_roots(path)
             && !self.hits_excluded_path(path)
-            && (self.include_hidden || !is_hidden(path))
             && !self.is_platform_excluded(path)
             && !path
                 .components()
@@ -75,36 +78,32 @@ impl Filter {
             .any(|excluded| path_starts_with(path, excluded))
     }
 
-    /// 单个路径组件是否被排除：隐藏目录 / `--exclude-dir` / 回收站。
+    /// 单个路径组件是否被排除：隐藏 / `--exclude-dir` / 回收站 / 平台目录名。
     fn component_is_excluded(&self, name: &OsStr) -> bool {
         (!self.include_hidden && component_is_hidden(name))
             || self.is_excluded_dir_name(name)
             || is_trash_dir(name)
+            || is_platform_excluded_dir_name(name)
     }
 
-    /// 是否命中平台自己的排除规则。
+    /// 是否命中平台排除的根。
     ///
-    /// 两个平台的规则形状不同：Windows 是「按目录名」，命中任何一层都排除；
-    /// Unix 是「按根」，只在路径落在这些根之下时排除。
-    ///
-    /// Windows 那份不用 `self`，但两边必须共用同一个方法签名，调用点才不必 `cfg` 分叉。
-    #[cfg(target_os = "windows")]
-    #[allow(clippy::unused_self)]
-    fn is_platform_excluded(&self, path: &Path) -> bool {
-        path.components().any(|component| {
-            component.as_os_str().to_str().is_some_and(|name| {
-                PLATFORM_EXCLUDED_DIRS.contains(&name.to_ascii_lowercase().as_str())
-            })
-        })
-    }
-
-    /// 是否命中平台排除的根（Unix：按根）。
+    /// 两个平台的规则形状不同：Windows 是「按目录名」，命中任何一层都排除（已经并进
+    /// [`Self::component_is_excluded`]）；Unix 是「按根」，只在路径落在这些根之下时排除。
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     fn is_platform_excluded(&self, path: &Path) -> bool {
         let text = path.to_string_lossy();
         PLATFORM_EXCLUDED_ROOTS
             .iter()
             .any(|root| excluded_root_hit(&text, root, &self.roots))
+    }
+
+    /// Windows 的排除规则是逐目录名的，见 [`Self::component_is_excluded`]，这里恒为 `false`。
+    /// 保留方法是为了让 `allows_path` 不用按平台分叉。
+    #[cfg(target_os = "windows")]
+    #[allow(clippy::unused_self)]
+    fn is_platform_excluded(&self, _path: &Path) -> bool {
+        false
     }
 
     fn in_roots(&self, path: &Path) -> bool {
@@ -116,12 +115,12 @@ impl Filter {
     }
 
     fn is_excluded_dir_name(&self, name: &OsStr) -> bool {
-        let Some(text) = name.to_str() else {
-            return false;
-        };
+        // 按字节比较（不是 `to_str()` 之后）：`exclude_dir_names` 都是 ASCII，
+        // 字节级 `eq_ignore_ascii_case` 对非 UTF-8 名字也给得出正确结论。
+        let bytes = name.as_encoded_bytes();
         self.exclude_dir_names
             .iter()
-            .any(|excluded| text.eq_ignore_ascii_case(excluded))
+            .any(|excluded| bytes.eq_ignore_ascii_case(excluded.as_bytes()))
     }
 
     /// 记录里是否跟随符号链接。
@@ -131,18 +130,32 @@ impl Filter {
     }
 }
 
-fn is_hidden(path: &Path) -> bool {
-    path.components()
-        .any(|c| component_is_hidden(c.as_os_str()))
+/// Windows 的平台排除是「按目录名」：命中任何一层都排除。
+#[cfg(target_os = "windows")]
+fn is_platform_excluded_dir_name(name: &OsStr) -> bool {
+    // 别在这里 `to_ascii_lowercase()`：每个目录的每个组件都分配一个 String，
+    // 是这条热路径上最贵的一笔。
+    let bytes = name.as_encoded_bytes();
+    PLATFORM_EXCLUDED_DIRS
+        .iter()
+        .any(|excluded| bytes.eq_ignore_ascii_case(excluded.as_bytes()))
+}
+
+#[cfg(not(target_os = "windows"))]
+fn is_platform_excluded_dir_name(_name: &OsStr) -> bool {
+    false
 }
 
 fn component_is_hidden(name: &OsStr) -> bool {
-    name.as_encoded_bytes().first() == Some(&b'.') && name.as_encoded_bytes().len() > 1
+    let bytes = name.as_encoded_bytes();
+    bytes.first() == Some(&b'.') && bytes.len() > 1
 }
 
 fn is_trash_dir(name: &OsStr) -> bool {
-    name.to_str()
-        .is_some_and(|text| TRASH_DIRS.iter().any(|t| text.eq_ignore_ascii_case(t)))
+    let bytes = name.as_encoded_bytes();
+    TRASH_DIRS
+        .iter()
+        .any(|trash| bytes.eq_ignore_ascii_case(trash.as_bytes()))
 }
 
 /// 大小写不敏感、且以目录边界为准的前缀判断。

@@ -1,6 +1,7 @@
 # 性能
 
 > 性能是本项目两条差异化主线之一（另一条是工程可测试性，见 [`testing.md`](testing.md)）。
+> 各次优化的**前后对照数字**在 [`benchmark.md`](benchmark.md)；本文是措施清单与选型基线。
 
 ## 1. 措施清单
 
@@ -14,6 +15,11 @@
 | ⑥ 提前剪枝 | 在目录层就砍掉 `node_modules`、`WinSxS`、`$Recycle.Bin`，比事后过滤省掉整个子树遍历。 |
 | ⑦ 线程本地缓冲 | 遍历线程各自持有 `Vec<Candidate>`，结束再合并，避免全量共享 `Arc<Mutex<Vec>>` 的锁竞争。 |
 | ⑧ 减少 stat | 复用 `DirEntry::file_type()` 已有的元数据，不额外 `fs::metadata`。 |
+| ⑨ 扫描缓冲复用 | `SignatureScanner` 自带 1 MiB 读缓冲，随 scanner 复用（`map_init` 每个 rayon 任务一份），不再是「文件数 × 1 MiB」的 alloc + memset。 |
+| ⑩ 剪枝规则单遍遍历 | `Filter::allows_path` 把隐藏 / `--exclude-dir` / 回收站 / Windows 平台目录合成**一遍** `components()`，且平台目录名用 `[u8]::eq_ignore_ascii_case` 比字节，不再对每个组件 `to_ascii_lowercase()` 分配 `String`。 |
+| ⑪ 去重与嵌套消解按长度剪枝 | `deduplicated_total` 与 `drop_apps_nested_in_identified_roots` 不再做 O(n²) 全表比较：按 root 长度升序处理，只跟**严格更短**的根比（长度相同不可能互相包含）。 |
+| ⑫ 条件变量不轮询 | 遍历队列空了就无条件 `wait`，不再用 1 ms 超时轮询（原来队列空但还有目录在途时，8 个线程每秒白醒 8000 次）。 |
+
 
 ## 2. 实测基线
 
@@ -124,4 +130,5 @@
 > 所以这个特性对我们无效。
 
 **原则**：先 profile 再优化。每一项优化都要有 benchmark 数字支撑才合入主干；上面四组
-数字即为基线，后续优化项必须拿同机同目录的对比数据才能合入。
+数字即为基线，后续优化项必须拿同机同目录的对比数据才能合入。历次对照结果记在
+[`benchmark.md`](benchmark.md)，那里也写明了哪些改动**量不出来**以及为什么。

@@ -3,6 +3,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 
+use crate::filter::path_starts_with;
 use crate::inspect::{DirInspection, inspect_directory};
 use crate::model::{AppKind, Candidate, CandidateKind};
 use crate::signature::{Flavor, SignatureScanner};
@@ -156,19 +157,44 @@ fn beats(existing: &DetectedApp, candidate: &DetectedApp) -> bool {
 }
 
 /// 丢掉"未识别但被某个已识别应用包含"的目录。
+///
+/// 只跟**顶层**已识别根比就够了：`U` 若在 `A` 里、`A` 又在 `B` 里，那 `U` 一定也在 `B` 里
+/// （前缀的传递性）。先把已识别的根按长度升序过一遍筛出顶层根 —— 能包含别人的根一定**严格
+/// 更短**，所以轮到某个根时它的所有祖先都已经在 `tops` 里了。
+///
+/// 再对每个未识别根做同样的剪枝：`tops` 也按长度非降序推入，只需跟「比它短」的那一段比。
+/// 原来是 `n_未识别 × n_已识别` 的全表扫描。
 fn drop_apps_nested_in_identified_roots(apps: &mut BTreeMap<PathBuf, DetectedApp>) {
-    let identified: Vec<PathBuf> = apps
+    let mut identified: Vec<&Path> = apps
         .values()
         .filter(|app| app.kind != AppKind::Unknown)
-        .map(|app| app.root.clone())
+        .map(|app| app.root.as_path())
         .collect();
+    identified.sort_by_cached_key(|root| root.as_os_str().as_encoded_bytes().len());
+
+    let mut tops: Vec<&Path> = Vec::new();
+    for root in identified {
+        let length = root.as_os_str().as_encoded_bytes().len();
+        let shorter = tops.partition_point(|top| top.as_os_str().as_encoded_bytes().len() < length);
+        if !tops[..shorter]
+            .iter()
+            .any(|top| path_starts_with(root, top))
+        {
+            tops.push(root);
+        }
+    }
+
     let stale: Vec<PathBuf> = apps
         .values()
         .filter(|app| app.kind == AppKind::Unknown)
         .filter(|app| {
-            identified
+            let root = app.root.as_path();
+            let length = root.as_os_str().as_encoded_bytes().len();
+            let shorter =
+                tops.partition_point(|top| top.as_os_str().as_encoded_bytes().len() < length);
+            tops[..shorter]
                 .iter()
-                .any(|root| root != &app.root && crate::filter::path_starts_with(&app.root, root))
+                .any(|top| *top != root && path_starts_with(root, top))
         })
         .map(|app| app.root.clone())
         .collect();
@@ -215,6 +241,17 @@ mod tests {
         Candidate {
             path: PathBuf::from(path),
             kind,
+        }
+    }
+
+    fn detected(root: &str, kind: AppKind, is_dir: bool) -> DetectedApp {
+        DetectedApp {
+            display: PathBuf::from(root),
+            executable: None,
+            kind,
+            evidence: None,
+            root: PathBuf::from(root),
+            is_dir,
         }
     }
 
@@ -274,6 +311,66 @@ mod tests {
         drop_apps_nested_in_identified_roots(&mut apps);
         assert_eq!(apps.len(), 1);
         assert!(apps.contains_key(&PathBuf::from("/apps/demo")));
+    }
+
+    /// 只跟顶层已识别根比就够了（前缀可传递），且不相干的未识别根必须留下。
+    #[test]
+    fn nesting_is_transitive_across_several_identified_roots() {
+        let mut apps: BTreeMap<PathBuf, DetectedApp> = BTreeMap::new();
+        for (root, kind, is_dir) in [
+            (r"C:\apps\outer", AppKind::Cef, true),
+            (r"C:\apps\outer\middle", AppKind::Electron, false),
+            (r"C:\apps\outer\middle\leaf", AppKind::Unknown, true),
+            (r"C:\apps\elsewhere", AppKind::Unknown, true),
+        ] {
+            apps.insert(PathBuf::from(root), detected(root, kind, is_dir));
+        }
+
+        drop_apps_nested_in_identified_roots(&mut apps);
+
+        assert!(
+            !apps.contains_key(Path::new(r"C:\apps\outer\middle\leaf")),
+            "被 outer 间接包含的未识别根也要丢掉"
+        );
+        assert!(
+            apps.contains_key(Path::new(r"C:\apps\elsewhere")),
+            "不相干的未识别根不能误伤"
+        );
+        assert_eq!(apps.len(), 3);
+    }
+
+    /// 没有已识别根时，未识别的根一条都不该少。
+    #[test]
+    fn nothing_is_dropped_without_identified_roots() {
+        let mut apps: BTreeMap<PathBuf, DetectedApp> = BTreeMap::new();
+        for root in [r"C:\a", r"C:\a\b", r"C:\c"] {
+            apps.insert(PathBuf::from(root), detected(root, AppKind::Unknown, true));
+        }
+
+        drop_apps_nested_in_identified_roots(&mut apps);
+
+        assert_eq!(apps.len(), 3);
+    }
+
+    /// 长度相同的根不会被当成"被包含"：同级的两千条未识别根全部保留。
+    #[test]
+    fn equal_length_roots_are_never_dropped_as_nested() {
+        let mut apps: BTreeMap<PathBuf, DetectedApp> = BTreeMap::new();
+        apps.insert(
+            PathBuf::from(r"C:\apps\identified"),
+            detected(r"C:\apps\identified", AppKind::Cef, true),
+        );
+        for index in 0..2000 {
+            let root = format!(r"C:\apps\app{index:04}");
+            apps.insert(
+                PathBuf::from(&root),
+                detected(&root, AppKind::Unknown, true),
+            );
+        }
+
+        drop_apps_nested_in_identified_roots(&mut apps);
+
+        assert_eq!(apps.len(), 2001);
     }
 
     #[test]
